@@ -32,7 +32,15 @@ Captions use `language = "auto"`, so whisper detects Hindi or English for each c
 
 ## Run
 
-There are three ways to run it:
+**Clip one specific stream or video:**
+
+```bash
+.venv/bin/python clipper.py run "https://www.youtube.com/watch?v=VIDEO_ID"
+```
+- **Live (or about to start):** records and logs chat until the stream ends, makes the clips, then exits.
+- **Already finished:** downloads YouTube's saved chat replay and the video (up to 1080p), then makes the clips. Past Twitch videos (`twitch.tv/videos/…`) work too. Past Kick streams don't, because Kick doesn't save chat.
+
+**Keep watching a channel:**
 
 ```bash
 ./run.sh                          # in a terminal: waits for live → records → clips → waits again

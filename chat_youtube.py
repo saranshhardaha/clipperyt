@@ -1,6 +1,6 @@
 """Log YouTube live chat to a TSV file — no account, read-only.
 
-usage: python chat_youtube.py <channel_handle> <out.tsv>
+usage: python chat_youtube.py <channel_handle | video_url> <out.tsv>
 
 Each line: <epoch_ms>\t<author>\t<message>
 epoch_ms is the time *we received* the message on this machine, so it
@@ -33,7 +33,7 @@ def live_video_url(handle: str) -> str | None:
 
 def main() -> None:
     handle, out_path = sys.argv[1], sys.argv[2]
-    url = None
+    url = handle if handle.startswith("http") else None  # direct video URL
     while not url:
         url = live_video_url(handle)
         if not url:

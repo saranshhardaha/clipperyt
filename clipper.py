@@ -2,6 +2,7 @@
 """clipperyt — record a YouTube/Twitch/Kick live stream + its chat, clip where chat spikes.
 
   python clipper.py watch                 wait for live → record + log chat → clip when it ends (loops)
+  python clipper.py run <url>             one stream/video: live → record+clip, finished → download video + chat replay, clip
   python clipper.py process <session>     (re)make clips for a finished session
   python clipper.py spikes  <session>     just list spikes — use this to tune config.toml
   python clipper.py status                is it waiting / recording / clipping?
@@ -11,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -100,7 +102,7 @@ def stream_url(platform: str, ch: str) -> str:
 
 def recorder_cmd(s: dict, out: Path) -> list[str]:
     p = record_platform(s)
-    url = stream_url(p, channels(s)[p])
+    url = s.get("url") or stream_url(p, channels(s)[p])
     if s.get("recorder", "streamlink") == "yt-dlp":
         return ["yt-dlp", "--wait-for-video", str(s.get("retry_seconds", 30)),
                 "--hls-use-mpegts", "--no-part", "--no-progress",
@@ -118,8 +120,8 @@ def recorder_cmd(s: dict, out: Path) -> list[str]:
 
 
 def chat_cmd(platform: str, ch: str, s: dict, out: Path) -> list[str]:
-    if platform == "youtube":
-        return [PY, str(ROOT / "chat_youtube.py"), ch, str(out)]
+    if platform == "youtube":  # a direct video URL (from `run <url>`) skips the /live lookup
+        return [PY, str(ROOT / "chat_youtube.py"), s.get("url") or ch, str(out)]
     if platform == "twitch":
         return [PY, str(ROOT / "chat_twitch.py"), ch, str(out)]
     return [PY, str(ROOT / "chat_kick.py"), ch, str(out), str(s.get("kick_chatroom_id", ""))]
@@ -145,8 +147,9 @@ def record_once(cfg: dict) -> Path | None:
 
     rp = record_platform(s)
     chans = channels(s)
-    log(f"waiting for {stream_url(rp, chans[rp])} to go live …")
-    set_state("waiting", url=stream_url(rp, chans[rp]))
+    src = s.get("url") or stream_url(rp, chans[rp])
+    log(f"waiting for {src} to go live …")
+    set_state("waiting", url=src)
     rec = subprocess.Popen(recorder_cmd(s, video), stdout=open(tmp / "recorder.log", "w"),
                            stderr=subprocess.STDOUT)
     chats: list[subprocess.Popen] = []
@@ -227,7 +230,8 @@ def cmd_spikes(session: Path) -> None:
 def cmd_process(session: Path) -> None:
     cfg = load_cfg()
     meta = json.loads((session / "meta.json").read_text())
-    video = session / "stream.ts"
+    video = next((session / f for f in ("stream.ts", "stream.mp4", "stream.mkv")
+                  if (session / f).exists()), session / "stream.ts")
     c, cap, rnd = cfg["clip"], cfg["captions"], cfg["render"]
     moments = session_moments(session, cfg)
     log(f"{len(moments)} chat spikes in {session.name}")
@@ -244,7 +248,8 @@ def cmd_process(session: Path) -> None:
     out_dir = session / "clips"
     out_dir.mkdir(exist_ok=True)
     index = [f"# Clips — {meta['channel']} ({plat}) — {meta['started']}\n",
-             "Links: " + " · ".join(stream_url(p, c) for p, c in chans.items()) + "\n",
+             "Links: " + " · ".join([meta["source_url"]] if meta.get("source_url") else
+                                    [stream_url(p, c) for p, c in chans.items()]) + "\n",
              "| # | time in stream | score | chat said | file |", "|---|---|---|---|---|"]
 
     for n, m in enumerate(moments, 1):
@@ -298,6 +303,89 @@ def cmd_status() -> None:
         print(f"latest clips: {done[-1]}")
 
 
+# ---------------------------------------------------------------- one URL (live or past)
+
+def platform_of(url: str) -> str:
+    host = re.sub(r"^www\.|^m\.", "", re.sub(r"^https?://", "", url).split("/")[0])
+    for p, hosts in {"youtube": ("youtube.com", "youtu.be"), "twitch": ("twitch.tv",),
+                     "kick": ("kick.com",)}.items():
+        if host in hosts:
+            return p
+    raise SystemExit(f"don't know which platform {url} is")
+
+
+def probe(url: str) -> dict:
+    """yt-dlp metadata: live_status (is_live / is_upcoming / was_live / not_live), channel…"""
+    r = subprocess.run(["yt-dlp", "-J", "--no-warnings", "--skip-download", url],
+                       capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        raise SystemExit(f"yt-dlp couldn't read {url}:\n{r.stderr.strip()[-500:]}")
+    return json.loads(r.stdout)
+
+
+def cmd_run(url: str) -> None:
+    plat = platform_of(url)
+    info = probe(url)
+    status = info.get("live_status") or ("is_live" if info.get("is_live") else "not_live")
+    name = (info.get("uploader_id") or info.get("channel") or info.get("uploader") or "streamer").lstrip("@")
+    log(f"{NAMES[plat]} · {name} · “{info.get('title', '')[:70]}” · {status}")
+    cfg = load_cfg()
+    if status in ("is_live", "is_upcoming"):
+        s = cfg["stream"]
+        s.update(url=url, record_from=plat, channels={plat: name})
+        session = record_once(cfg)  # one stream only, no loop
+        if session:
+            meta = json.loads((session / "meta.json").read_text())
+            meta["source_url"] = url
+            (session / "meta.json").write_text(json.dumps(meta, indent=2))
+            cmd_process(session)
+        set_state("idle")
+    else:
+        cmd_vod(url, plat, name, info)
+
+
+def cmd_vod(url: str, plat: str, name: str, info: dict) -> None:
+    """A finished stream: download the video + chat replay, then clip."""
+    if plat == "kick":
+        raise SystemExit("Kick doesn't keep chat for past streams — only live works for Kick")
+    session = SESSIONS / f"{datetime.now():%Y%m%d-%H%M}-vod"
+    session.mkdir(parents=True, exist_ok=True)
+    (session / "meta.json").write_text(json.dumps({
+        "platform": plat, "channel": name, "chat_from": {plat: name}, "source_url": url,
+        "title": info.get("title"), "rec_start_ms": 0, "vod": True,
+        "started": datetime.now().isoformat(timespec="seconds"),
+    }, indent=2, ensure_ascii=False))
+    set_state("processing", session=session.name, step="downloading chat replay")
+
+    chat_path = session / f"chat_{plat}.tsv"
+    if not chat_path.exists() or chat_path.stat().st_size == 0:
+        log("downloading chat replay …")
+        from chat_downloader import ChatDownloader  # replay messages carry time_in_seconds
+        n = 0
+        with open(chat_path, "w", encoding="utf-8") as f:
+            for m in ChatDownloader().get_chat(url, message_groups=["messages", "superchat"]):
+                t = m.get("time_in_seconds")
+                if t is None or t < 0:
+                    continue
+                author = (m.get("author") or {}).get("name", "?")
+                text = (m.get("message") or "").replace("\t", " ").replace("\n", " ")
+                f.write(f"{int(t * 1000)}\t{author}\t{text}\n")  # ms since video start
+                n += 1
+                if n % 5000 == 0:
+                    log(f"  {n} messages …")
+        log(f"chat replay: {n} messages")
+
+    if not any((session / f).exists() for f in ("stream.mp4", "stream.mkv")):
+        set_state("processing", session=session.name, step="downloading video")
+        log("downloading video (up to 1080p) …")
+        r = subprocess.run(["yt-dlp", "--no-warnings", "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
+                            "--merge-output-format", "mp4", "-o", str(session / "stream.%(ext)s"), url])
+        if r.returncode != 0:
+            raise SystemExit("video download failed")
+    cmd_process(session)
+    set_state("idle")
+
+
 def cmd_watch() -> None:
     while True:
         cfg = load_cfg()  # re-read each stream, so edits apply next time
@@ -328,6 +416,13 @@ def main() -> None:
         signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
         try:
             cmd_watch()
+        except KeyboardInterrupt:
+            pass
+        return
+    if args[0] == "run" and len(args) == 2:
+        signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+        try:
+            cmd_run(args[1])
         except KeyboardInterrupt:
             pass
         return
