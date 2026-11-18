@@ -149,6 +149,14 @@ When you wake up, open `sessions/<date>/clips.md`. It lists every clip with its 
     2. Export the cookies as `cookies.txt` with a "cookies.txt" browser extension.
     3. Upload it in **Settings → Stream defaults → YouTube cookies → Upload cookies.txt**. The dashboard stores it as an owner-only file and switches it on. You can also put the file in the app folder and set the path yourself.
   - yt-dlp and streamlink both use it. `cookies*.txt` is gitignored. The file is your login, so keep it private.
+- **A job says "waiting" although the stream is live:** check the job card or log for a `recorder:` line. That's the recorder's own error, for example YouTube's "No playable streams" or "not a bot".
+  - With `recorder = "auto"` (the default), YouTube records with yt-dlp, which works with cookies, and Twitch and Kick use streamlink.
+  - Older configs say `"streamlink"`. For YouTube the job then switches to yt-dlp by itself when streamlink is blocked but yt-dlp sees the stream live.
+  - To check by hand on the server:
+    ```bash
+    .venv/bin/yt-dlp --cookies youtube-cookies.txt -F "<url>"
+    ```
+    That should list formats. If it doesn't, run `./update.sh` (installs deno) and re-export your cookies.
 - **Creating a job fails on Linux (`net::ERR_EMPTY_RESPONSE`, or "PermissionError"):** the dashboard's user can't write to the app folder. This usually means setup ran with `sudo`. Fix it with `sudo chown -R <user> /path/to/clipperyt`. The current `setup_linux.sh` and `install_service.sh` do this for you, and the dashboard warns about it on the Jobs and System tabs.
 - **Kick recording fails:** run `streamlink --plugins` to check for `kick`. If it's missing, set `recorder = "yt-dlp"`.
 - **Kick chat says "couldn't read chatroom id":** Kick's Cloudflare blocked the lookup. Open `https://kick.com/api/v2/channels/<slug>` in a browser, copy `"chatroom":{"id":…}` into `kick_chatroom_id`.
