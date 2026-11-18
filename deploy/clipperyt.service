@@ -1,0 +1,20 @@
+# Dashboard on boot. The watcher is started/stopped from the dashboard and keeps
+# running even if this service restarts. Edit User/paths, then see README-systemd.md
+[Unit]
+Description=clipperyt dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=CHANGE_ME
+WorkingDirectory=/opt/clipperyt
+Environment=PATH=/opt/clipperyt/.venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=CLIPPER_TOKEN=CHANGE_ME_LONG_RANDOM
+Environment=CLIPPER_PORT=8787
+ExecStart=/opt/clipperyt/.venv/bin/python -u server.py
+# don't kill a recording when the dashboard restarts
+KillMode=process
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

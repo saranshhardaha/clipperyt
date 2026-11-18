@@ -1,0 +1,63 @@
+# clipperyt config — edit this, then run ./run.sh
+
+[stream]
+# Fill in every platform the streamer is live on. Chat from ALL of them is
+# combined for spike detection; video is recorded from `record_from` only.
+# Leave a platform as "" if they don't stream there.
+record_from = "youtube"     # "youtube", "twitch" or "kick"
+
+[stream.channels]
+youtube = "CHANNEL_HANDLE"  # youtube.com/@<handle>  (without @)
+twitch  = ""                # twitch.tv/<login>
+kick    = ""                # kick.com/<slug>
+
+[stream.options]
+# Recorder: "streamlink" (default) or "yt-dlp" (fallback, e.g. if streamlink's Kick plugin breaks)
+recorder = "streamlink"
+quality = "best"
+# Seconds between "is it live yet?" checks while waiting
+retry_seconds = 30
+# Twitch only: skip the ad segments Twitch stitches into the stream (the ad isn't
+# recorded; the stream underneath it is lost either way for logged-out viewers)
+twitch_disable_ads = true
+# Twitch only, optional: OAuth token of an account with Turbo or a sub to this
+# channel → no ads at all, nothing lost. (twitch.tv → DevTools → Cookies → auth-token)
+twitch_oauth_token = ""
+# Kick only: set this if the chatroom id lookup gets blocked (see README)
+# kick_chatroom_id = 123456
+
+[spikes]
+bucket_seconds = 10         # chat is counted in 10 s buckets
+baseline_seconds = 300      # compared against the previous 5 minutes
+multiplier = 3.0            # spike = bucket >= 3x baseline average
+min_messages = 8            # ignore "spikes" in a dead chat (2 msgs vs 0.5 avg)
+warmup_seconds = 120        # skip the first 2 minutes (chat flood when stream starts)
+merge_seconds = 60          # spikes closer than this become one clip
+# Short hype messages get extra weight (case-insensitive, matched as whole message or word)
+hype_words = ["omg", "lol", "lmao", "gg", "w", "l", "bhai", "op", "kya", "bc", "wtf", "clip", "clip it", "😂", "🤣", "💀", "🔥", "pog", "hahaha",
+              # Twitch emotes arrive as words
+              "kekw", "lul", "omegalul", "pogchamp", "poggers", "monkas", "pepelaugh", "kappa", "lulw", "sadge", "ez", "clap"]
+hype_weight = 0.5           # each hype message counts as 1.5 instead of 1
+
+[clip]
+stream_delay_seconds = 8    # viewers see the stream ~8 s late, so chat reacts late
+lead_seconds = 30           # start clip this long before the (delay-corrected) spike
+length_seconds = 45
+max_clips = 25              # keep only the top N per stream
+
+[captions]
+enabled = true
+whisper_bin = "whisper-cli"
+model = "models/ggml-large-v3-turbo-q5_0.bin"
+language = "auto"           # "auto" detects per clip (Hindi or English) · or force "hi" / "en"
+translate = false           # true = English captions (needs a non-turbo model, e.g. ggml-medium.bin)
+
+[render]
+vertical = true             # 1080x1920 Shorts version
+# "blur" = full 16:9 frame over a blurred background, "crop" = centre-cropped to 9:16
+mode = "blur"
+# "auto" = Mac hardware (videotoolbox) → NVIDIA GPU (nvenc) → CPU (libx264)
+encoder = "auto"
+font_size = 64               # caption size in px on a 1080-wide frame
+font = "auto"               # auto = Kohinoor Devanagari (Mac) / Noto Sans Devanagari (Linux)
+credit = true               # small "@channel on YouTube/Kick" credit burned in at the top

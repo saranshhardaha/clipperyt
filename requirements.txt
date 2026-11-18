@@ -1,0 +1,2 @@
+chat-downloader>=0.2.8
+websockets>=12
