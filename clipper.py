@@ -397,34 +397,42 @@ def recorder_cmd(s: dict, out: Path) -> list[str]:
     return cmd + [url, s.get("quality", "best")]
 
 
-def claim_session_dir(tmp: Path, channel: str) -> Path:
-    """Rename the waiting folder to a new, unique <recordings>/<channel>/<id> folder.
+WAIT_MARK = ".waiting"  # inside a session folder that hasn't gone live yet (no meta.json)
 
-    The target never exists beforehand: renaming over an existing (even empty) folder is
-    refused by many NAS/ZFS shares and LXC bind mounts, while a plain rename to a free name
-    works everywhere. The recorder keeps writing through its open file handle."""
-    import errno
-    parent = channel_dir(SESSIONS, channel)
-    parent.mkdir(parents=True, exist_ok=True)
+
+def clear_waiting(wait_name: str) -> None:
+    """Remove folders a job left waiting (it was stopped or crashed before the stream went live)."""
+    for r in session_roots():
+        shutil.rmtree(r / wait_name, ignore_errors=True)  # old layout: <root>/_waiting-<job>
+        for m in r.glob(f"*/*/{WAIT_MARK}") if r.is_dir() else []:
+            d = m.parent
+            try:
+                if m.read_text().strip() == wait_name and not (d / "meta.json").exists():
+                    shutil.rmtree(d, ignore_errors=True)
+            except OSError:
+                pass
+
+
+def finalize_session_dir(tmp: Path, channel: str) -> Path:
+    """Stream went live: give the folder a name with the go-live time — a rename within the same
+    folder, which shares allow. If even that's refused, keep the name it already has."""
     base = f"{datetime.now():%Y%m%d-%H%M}-{slug(channel)}"
-    last: OSError | None = None
-    for n in range(1, 1000):
+    (tmp / WAIT_MARK).unlink(missing_ok=True)
+    if tmp.name == base or tmp.name.startswith(base + "-"):
+        return tmp
+    for n in range(1, 100):
         name = base if n == 1 else f"{base}-{n}"
-        dst = parent / name
+        dst = tmp.parent / name
         if find_session(name) or os.path.lexists(dst):
             continue
         try:
             os.rename(tmp, dst)
             return dst
-        except OSError as e:
-            last = e
-            # NFS can report an error for a rename that went through (retried request)
-            if not os.path.lexists(tmp) and os.path.isdir(dst):
+        except OSError:
+            if not os.path.lexists(tmp) and os.path.isdir(dst):  # NFS: reported error, but it happened
                 return dst
-            if e.errno in (errno.EEXIST, errno.ENOTEMPTY):  # another job took the name just now
-                continue
-            raise
-    raise RuntimeError(f"couldn't pick a session folder name in {parent}: {last}")
+            return tmp
+    return tmp
 
 
 def youtube_is_live(url: str) -> bool:
@@ -479,14 +487,15 @@ def record_once(cfg: dict, wait_name: str = "_waiting", job: str | None = None) 
     err = check_dir(SESSIONS, create=SESSIONS == DEFAULT_SESSIONS)
     if err:
         raise StorageUnavailable(f"recordings folder unavailable: {err}")
-    tmp = SESSIONS / wait_name  # one per job, so parallel jobs never share it
-    if tmp.exists():
-        shutil.rmtree(tmp, ignore_errors=True)
-    tmp.mkdir(parents=True)
-    video = tmp / "stream.ts"
-
     rp = record_platform(s)
     chans = channels(s)
+    # wait (and start recording) directly inside <recordings>/<channel>/ under a final-looking
+    # name: some NAS shares (ZFS ACLs, NFS, LXC bind mounts) refuse moving a folder to another
+    # parent, so the folder must already be where the session lives
+    clear_waiting(wait_name)
+    tmp = new_session_dir(chans[rp])
+    (tmp / WAIT_MARK).write_text(wait_name)
+    video = tmp / "stream.ts"
     src = s.get("url") or stream_url(rp, chans[rp])
     log(f"waiting for {src} to go live …")
     set_state("waiting", url=src)
@@ -526,7 +535,7 @@ def record_once(cfg: dict, wait_name: str = "_waiting", job: str | None = None) 
 
         # reserve a unique empty folder, then rename onto it (POSIX allows dir → empty dir);
         # streamlink keeps writing through its open file handle
-        session = claim_session_dir(tmp, chans[rp])
+        session = finalize_session_dir(tmp, chans[rp])
         video = session / "stream.ts"
         meta = {"platform": rp, "channel": chans[rp], "chat_from": chans,
                 "rec_start_ms": rec_start_ms, "started": datetime.now().isoformat(timespec="seconds")}
@@ -918,8 +927,7 @@ def cmd_job(jid: str) -> None:
         final, extra = "failed", {"error": f"{type(e).__name__}: {e}"}
         log(f"failed: {e!r}")
     set_state(final, kind=job["kind"], **extra)
-    for r in session_roots():
-        shutil.rmtree(r / f"_waiting-{jid}", ignore_errors=True)
+    clear_waiting(f"_waiting-{jid}")
 
 
 def main() -> None:

@@ -65,9 +65,15 @@ def move_session(src: Path, dst_root: Path, st: dict, copy: bool | None = None) 
     if copy is None:
         copy = os.stat(src).st_dev != os.stat(parent).st_dev
     if not copy:  # same filesystem
-        os.rename(src, final)
-        st["done"] = st["total"]
-        return final
+        try:
+            os.rename(src, final)
+            st["done"] = st["total"]
+            return final
+        except OSError:
+            if not os.path.lexists(src) and final.is_dir():  # NFS: reported error, but it happened
+                st["done"] = st["total"]
+                return final
+            # some NAS shares refuse moving folders between parents → copy, verify, delete
     tmp = parent / f".moving-{src.name}"
     shutil.rmtree(tmp, ignore_errors=True)
     for root, dirs, files in os.walk(src):
