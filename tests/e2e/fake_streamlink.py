@@ -9,6 +9,10 @@ work = Path(os.environ["E2E_WORK"])
 mark = work / ("streamed-" + hashlib.md5(url.encode()).hexdigest()[:8])
 try:
     time.sleep(2)
+    if "BLOCKED" in url:  # YouTube bot check: streamlink can't get the stream
+        while True:
+            print(f"error: No playable streams found on this URL: {url}", flush=True)
+            time.sleep(5)
     if mark.exists():
         while True:
             time.sleep(1)

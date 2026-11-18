@@ -5,7 +5,28 @@ from pathlib import Path
 args = sys.argv[1:]
 work = Path(os.environ["E2E_WORK"])
 url = args[-1]
-if "-J" in args and "LIVEVIDEO" in url:
+if "--hls-use-mpegts" in args:  # live recording (recorder = yt-dlp)
+    import hashlib, time
+    out = Path(args[args.index("-o") + 1])
+    mark = work / ("streamed-" + hashlib.md5(url.encode()).hexdigest()[:8])
+    if mark.exists():  # already streamed once → channel is offline now
+        print(f"ERROR: [youtube:tab] {url}: The channel is not currently live", flush=True)
+        sys.exit(1)
+    mark.touch()
+    data = (work / "src.ts").read_bytes()
+    secs = float(os.environ.get("E2E_SECONDS", "90"))
+    step = len(data) / secs / 4
+    try:
+        with open(out, "wb") as f:
+            i = 0.0
+            while i < len(data):
+                f.write(data[int(i):int(i + step)]); f.flush()
+                i += step
+                time.sleep(0.25)
+    except KeyboardInterrupt:
+        pass
+    sys.exit(0)
+if "-J" in args and ("LIVEVIDEO" in url or "BLOCKED" in url):
     print(json.dumps({"live_status": "is_live", "uploader_id": "@liveguy", "title": "Live now"}))
 elif "-J" in args:
     print(json.dumps({"live_status": "was_live", "uploader_id": "@vodguy", "title": "Old stream", "duration": 90}))

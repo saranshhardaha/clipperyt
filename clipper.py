@@ -360,14 +360,30 @@ def stream_url(platform: str, ch: str) -> str:
             "kick": f"https://kick.com/{ch}"}[platform]
 
 
+def recorder_for(s: dict, platform: str) -> str:
+    """auto: YouTube → yt-dlp (handles cookies + YouTube's JS challenge; streamlink gets
+    "No playable streams" when YouTube bot-checks), Twitch/Kick → streamlink (ad skipping)."""
+    r = s.get("recorder", "auto")
+    if r in ("streamlink", "yt-dlp"):
+        return r
+    return "yt-dlp" if platform == "youtube" else "streamlink"
+
+
+def ytdlp_format(quality: str) -> str:
+    """streamlink-style quality ("best", "1080p60", "720p") → yt-dlp format for one muxed live stream."""
+    m = re.match(r"(\d{3,4})p", quality or "")
+    cap = f"[height<={m[1]}]" if m else ""
+    return f"best{cap}[vcodec!=none][acodec!=none]/best{cap}/best"
+
+
 def recorder_cmd(s: dict, out: Path) -> list[str]:
     p = record_platform(s)
     url = s.get("url") or stream_url(p, channels(s)[p])
-    if s.get("recorder", "streamlink") == "yt-dlp":
+    if recorder_for(s, p) == "yt-dlp":
+        # live from "now" (not from the start), muxed HLS straight into one growing .ts file
         return ["yt-dlp", *YTDLP_AUTH, "--wait-for-video", str(s.get("retry_seconds", 30)),
-                "--hls-use-mpegts", "--no-part", "--no-progress",
-                "-f", "best" if s.get("quality", "best") == "best" else s["quality"],
-                "-o", str(out), url]
+                "--hls-use-mpegts", "--no-part", "--no-progress", "--no-mtime", "--fixup", "never",
+                "--newline", "-f", ytdlp_format(s.get("quality", "best")), "-o", str(out), url]
     cmd = ["streamlink", "--retry-streams", str(s.get("retry_seconds", 30)), "--retry-max", "0",
            "--force", "--hls-live-edge", "2", "-o", str(out)]
     if p == "youtube":
@@ -379,6 +395,55 @@ def recorder_cmd(s: dict, out: Path) -> list[str]:
         if s.get("twitch_oauth_token"):  # Turbo / channel sub account → no ads at all
             cmd.append(f"--twitch-api-header=Authorization=OAuth {s['twitch_oauth_token']}")
     return cmd + [url, s.get("quality", "best")]
+
+
+def adopt_dir(src: Path, dst: Path) -> None:
+    """Move the waiting folder onto the reserved (empty) session folder.
+
+    Renaming a directory over an existing empty one is fine on local disks, but NAS/ZFS
+    shares and LXC bind mounts (NFS, SMB, idmapped) often refuse it with EACCES. Then move
+    each file instead — still a rename within the same filesystem, so the recorder's open
+    file handle keeps writing to the moved stream.ts."""
+    try:
+        src.rename(dst)
+        return
+    except OSError:
+        pass
+    for f in src.iterdir():
+        os.rename(f, dst / f.name)
+    try:
+        src.rmdir()
+    except OSError:
+        pass
+
+
+def youtube_is_live(url: str) -> bool:
+    try:
+        r = subprocess.run(["yt-dlp", *YTDLP_AUTH, "-J", "--no-warnings", "--skip-download",
+                            "--ignore-no-formats-error", url], capture_output=True, text=True, timeout=90)
+        return r.returncode == 0 and json.loads(r.stdout).get("live_status") == "is_live"
+    except Exception:
+        return False
+
+
+def recorder_problem(path: Path) -> str | None:
+    """Last error-looking line of recorder.log (streamlink / yt-dlp), shortened."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 8000))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        low = line.lower()
+        if any(k in low for k in ("error", "no playable streams", "not a bot", "sign in", "unable",
+                                  "not currently live", "forbidden", "429")):
+            msg = line.strip()
+            if any(b in msg for b in BOT_CHECK):
+                return "YouTube bot check — upload cookies in Settings → Stream defaults → YouTube cookies"
+            return msg[:220]
+    return None
 
 
 def chat_cmd(platform: str, ch: str, s: dict, out: Path) -> list[str]:
@@ -421,17 +486,38 @@ def record_once(cfg: dict, wait_name: str = "_waiting", job: str | None = None) 
     session: Path | None = None
     try:
         # recording "starts" when the first bytes hit disk — that's t=0 for the video
+        seen, last_check, last_probe = "", 0.0, 0.0
         while rec.poll() is None and not (video.exists() and video.stat().st_size > 0):
             time.sleep(0.5)
-        if rec.poll() is not None and not video.exists():
-            log("recorder exited before the stream started — see recorder.log")
+            if time.time() - last_check > 20:  # surface the recorder's complaint instead of a silent "waiting"
+                last_check = time.time()
+                msg = recorder_problem(tmp / "recorder.log")
+                if msg and msg != seen:
+                    seen = msg
+                    log(f"recorder: {msg}")
+                    set_state("waiting", url=src, error=f"recorder: {msg}")
+                # YouTube blocks streamlink ("No playable streams") while yt-dlp + cookies still work:
+                # if yt-dlp says it's live, switch recorders instead of waiting forever
+                if (rp == "youtube" and recorder_for(s, rp) == "streamlink" and msg
+                        and "no playable streams" in msg.lower() and time.time() - last_probe > 60):
+                    last_probe = time.time()
+                    if youtube_is_live(src):
+                        log("streamlink can't get the stream but yt-dlp sees it live — switching to yt-dlp")
+                        stop(rec)
+                        video.unlink(missing_ok=True)
+                        s = {**s, "recorder": "yt-dlp"}
+                        rec = subprocess.Popen(recorder_cmd(s, video), stdout=open(tmp / "recorder.log", "a"),
+                                               stderr=subprocess.STDOUT)
+        if rec.poll() is not None and not (video.exists() and video.stat().st_size > 0):
+            msg = recorder_problem(tmp / "recorder.log")
+            log(f"recorder exited before the stream started{': ' + msg if msg else ' — see recorder.log'}")
             return None
         rec_start_ms = int(time.time() * 1000)
 
         # reserve a unique empty folder, then rename onto it (POSIX allows dir → empty dir);
         # streamlink keeps writing through its open file handle
         session = new_session_dir(chans[rp])
-        tmp.rename(session)
+        adopt_dir(tmp, session)
         video = session / "stream.ts"
         meta = {"platform": rp, "channel": chans[rp], "chat_from": chans,
                 "rec_start_ms": rec_start_ms, "started": datetime.now().isoformat(timespec="seconds")}
@@ -737,7 +823,12 @@ def cmd_watch(job: dict | None = None) -> None:
             STOPFILE.unlink(missing_ok=True)
             set_state("idle")
             return
-        time.sleep(10)
+        # recorder gave up (e.g. yt-dlp: "channel is not currently live") → don't hammer the site
+        pause = 10 if session else max(10, int(cfg["stream"].get("retry_seconds", 30)))
+        for _ in range(pause):
+            if STOP or STOPFILE.exists():
+                break
+            time.sleep(1)
 
 
 def cmd_doctor() -> None:

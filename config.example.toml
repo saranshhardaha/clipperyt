@@ -14,8 +14,9 @@ twitch  = ""                # twitch.tv/<login>
 kick    = ""                # kick.com/<slug>
 
 [stream.options]
-# Recorder: "streamlink" (default) or "yt-dlp" (fallback, e.g. if streamlink's Kick plugin breaks)
-recorder = "streamlink"
+# Recorder: "auto" = YouTube → yt-dlp (works with cookies when YouTube bot-checks),
+# Twitch/Kick → streamlink (skips Twitch ads). Or force "streamlink" / "yt-dlp".
+recorder = "auto"
 quality = "best"
 # Seconds between "is it live yet?" checks while waiting
 retry_seconds = 30
