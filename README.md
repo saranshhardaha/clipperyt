@@ -7,74 +7,71 @@ streamlink ──► stream.ts ─┐
 chat (no login) ► chat.tsv ┴► spikes.py ► ffmpeg cut ► whisper.cpp (Hindi) ► 1080x1920 short.mp4
 ```
 
-## Setup (once, macOS)
+## Setup (once)
 
 ```bash
 cd ~/app/clipperyt
-./setup.sh          # brew: ffmpeg streamlink yt-dlp whisper-cpp · python venv · ~550 MB whisper model
+./setup.sh            # macOS: brew ffmpeg(+libass) streamlink yt-dlp whisper-cpp · venv · ~550 MB model
+./setup_linux.sh      # Debian/Ubuntu/Proxmox LXC: apt · Python ≥3.11 · builds whisper.cpp (CUDA if nvcc) · model
 ```
 
-Edit `config.toml` (setup creates it from `config.example.toml`; it's gitignored so tokens never get committed):
+Add `--service` to either one to also start the dashboard automatically (systemd on Linux, a LaunchAgent on macOS). Both end with `clipper.py doctor`, which checks every tool. You can run it again any time.
 
-```toml
-[stream]
-record_from = "youtube"   # which platform's video to record
-
-[stream.channels]         # fill in every platform they're live on
-youtube = "SomeGamer"     # youtube.com/@SomeGamer
-twitch  = "somegamer"     # twitch.tv/somegamer   ("" if not on Twitch)
-kick    = ""
-```
-
-Simulcasting to YouTube and Twitch at once? Fill in both. The video gets recorded once from `record_from`, and chat from both platforms is combined, so you get more chat to detect spikes from.
-
-Captions use `language = "auto"`, so whisper detects Hindi or English for each clip. You can force it with `"hi"` or `"en"`.
-
-## Run
-
-**Clip one specific stream or video:**
+## Run: the dashboard
 
 ```bash
-.venv/bin/python clipper.py run "https://www.youtube.com/watch?v=VIDEO_ID"
+.venv/bin/python server.py        # http://<machine-ip>:8787
 ```
-- **Live (or about to start):** records and logs chat until the stream ends, makes the clips, then exits.
-- **Already finished:** downloads YouTube's saved chat replay and the video (up to 1080p), then makes the clips. Past Twitch videos (`twitch.tv/videos/…`) work too. Past Kick streams don't, because Kick doesn't save chat.
 
-**Keep watching a channel:**
+- **Jobs:** each job runs on its own, and as many as you like can run at once.
+  - **Watch channels:** fill in the YouTube, Twitch and Kick names (any of them) and pick which one to record video from. The job waits for the stream to go live, records it and its chat, makes the clips, then waits for the next stream.
+  - **One link:** a live or upcoming stream gets recorded until it ends, then clipped. A finished YouTube or Twitch video gets downloaded with its chat replay, then clipped.
+  - Each job card shows live stats: time recorded, GB, bitrate, chat per minute with a 30-minute sparkline, messages per platform, unique chatters, and moments found so far. It also shows clipping progress and the job's log.
+  - Tick **autostart** and the job starts again whenever the dashboard starts, for example after a reboot.
+  - **Stop** still clips what was recorded. **Kill** stops at once, without clipping.
+- **Sessions:** every recording with its length, chat, chatters, spikes, clips and size.
+  - Open a session to play or download each clip, its raw cut and its captions, or to list spikes with the current settings.
+  - **Re-make clips** after you change the settings.
+  - **Free disk** deletes the full recording but keeps the clips.
+- **Settings:** every option in `config.toml` as a form, with help text. **Advanced** is the raw TOML editor. Saved settings apply to each job's next stream or clip run.
+- **System:** free disk, totals, CPU load, the encoder in use, and which tools are installed (ffmpeg plus libass, streamlink, yt-dlp, whisper, the model).
+
+Clipping (cut, then whisper, then render) is heavy, so only `Clip jobs at once` streams get clipped at the same time (Settings → Limits, default 1). Others wait in line as `queued`. Recording is never limited.
+
+Jobs run as separate processes. Restarting the dashboard never cuts a recording, and a job that crashes doesn't affect the others.
+
+Protect the dashboard with a token: `CLIPPER_TOKEN=some-long-secret .venv/bin/python server.py`, then open `/?token=some-long-secret` once (a cookie keeps you logged in). `install_service.sh` generates a token for you. Without a token, anyone on the network can control it, so keep it on your LAN or Tailscale and never port-forward it.
+
+`CLIPPER_HOME=/some/disk` keeps the config, sessions and jobs somewhere other than the app folder, for example a bigger disk.
+
+### Output shape (Settings → Render)
+
+| `format` | size | what you get |
+|---|---|---|
+| `9:16-blur` (default) | 1080x1920 | the **whole** 16:9 frame across the middle, with a blurred copy filling the top and bottom |
+| `9:16-bars` | 1080x1920 | the **whole** 16:9 frame across the middle, with black top and bottom |
+| `16:9` | 1920x1080 | the original shape |
+| `9:16-crop` | 1080x1920 | a centre crop that fills the screen but cuts off the sides |
+
+In both 9:16 modes, captions go just under the picture and the credit line goes in the top band.
+
+## Run: from a terminal
 
 ```bash
-./run.sh                          # in a terminal: waits for live → records → clips → waits again
-.venv/bin/python clipper.py status   # quick check: stopped / waiting / live (minutes, GB, chat counts) / processing
-.venv/bin/python server.py           # web dashboard on http://<machine-ip>:8787
+.venv/bin/python clipper.py run "https://www.youtube.com/watch?v=VIDEO_ID"   # one stream or video
+./run.sh                                  # watch the default channels in config.toml, loop
+.venv/bin/python clipper.py status        # stopped / waiting / live / processing
+.venv/bin/python clipper.py doctor        # check tools
 ```
+A terminal run shows up in the dashboard too, as a "terminal run" job you can stop.
 
-### Dashboard (`server.py`)
-
-From any device on your network you can:
-- see the live status (minutes recorded, GB on disk, chat messages per platform, free disk space) and the log
-- **Start watching**, **Stop** (it still clips what was recorded) or **Kill** (stops immediately, no clipping)
-- browse sessions, play and download each Short or its raw cut, list spikes, re-make clips
-- edit `config.toml`. Invalid TOML is rejected, and a `.bak` copy is kept.
-
-It uses only the Python standard library. The watcher runs as its own process, so restarting the dashboard never cuts off a recording.
-
-Protect it with a token: `CLIPPER_TOKEN=some-long-secret .venv/bin/python server.py`, then open `/?token=some-long-secret` once (a cookie keeps you logged in). Without a token, anyone on the network can control it, so keep it on your LAN or Tailscale and never port-forward it.
-
-### On a Linux server (e.g. a Proxmox LXC)
-
-```bash
-./setup_linux.sh    # apt deps, venv (streamlink + yt-dlp), builds whisper.cpp (with CUDA if nvcc exists), model
-```
-
-Then follow `deploy/README-systemd.md` to start the dashboard on boot. On an NVIDIA box, captions and rendering use the GPU automatically (`encoder = "auto"`).
-
-Keep the Mac plugged in with the lid open. `caffeinate` stops it sleeping, but closing the lid still puts it to sleep.
+Keep the Mac plugged in with the lid open. Each job runs under `caffeinate` so the Mac doesn't sleep, but closing the lid still puts it to sleep.
 
 When you wake up, open `sessions/<date>/clips.md`. It lists every clip with its time in the stream, its spike score and what chat was saying. Each clip folder holds:
 
 | file | what |
 |---|---|
-| `short.mp4` | 1080x1920 with captions and a credit line, ready to post |
+| `short.mp4` / `captioned.mp4` | 9:16 or 16:9 (see Output shape) with captions and a credit line, ready to post |
 | `raw.mp4` | the original 45 s cut with no edits |
 | `speech.srt` | the whisper transcript, to fix typos and re-render |
 | `chat.txt` | the most repeated chat messages at that moment |
@@ -109,8 +106,8 @@ When you wake up, open `sessions/<date>/clips.md`. It lists every clip with its 
 - **Kick chat says "couldn't read chatroom id":** Kick's Cloudflare blocked the lookup. Open `https://kick.com/api/v2/channels/<slug>` in a browser, copy `"chatroom":{"id":…}` into `kick_chatroom_id`.
 - **Kick chat connects but stays empty:** Kick may have moved off Pusher. Update `PUSHER_URL` in `chat_kick.py`.
 - **YouTube chat errors:** update yt-dlp (`brew upgrade yt-dlp`). Live chat reads YouTube's popout endpoint directly; if YouTube changes it, fix `bootstrap()` in `chat_youtube.py`.
-- **`subtitles`/`ass` filter missing:** your ffmpeg lacks libass. `setup.sh` prints the fix.
-- **Logs:** check `logs/`, plus `recorder.log` and `chat.log` inside each session.
+- **No captions or credit line:** your ffmpeg lacks libass (Homebrew's plain `ffmpeg` 8+ doesn't include it). `setup.sh` installs `ffmpeg-full`, which clipperyt uses automatically. The System tab and `clipper.py doctor` both show whether libass is there. Until it is, clips still render, just without captions.
+- **Logs:** each job's log is in the dashboard (or `jobs/<id>/job.log`). Inside each session there are also `recorder.log` and `chat_<platform>.log`.
 
 ## Cost
 

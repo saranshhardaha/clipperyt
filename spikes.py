@@ -76,8 +76,9 @@ def find_moments(chat: list[tuple[int, str, str]], rec_start_ms: int, cfg: dict)
         weight[i] += 1 + (hw if _is_hype(text, hype) else 0)
         texts[i].append(text)
 
-    # rolling baseline over the previous base_n buckets (needs at least 1 minute of history)
-    min_hist = max(1, int(60 / b))
+    # rolling baseline over the previous base_n buckets (needs 1 minute of history,
+    # or the whole baseline window if that's shorter — else nothing could ever fire)
+    min_hist = max(1, min(base_n, int(60 / b)))
     hits: list[tuple[int, float]] = []
     running = 0.0
     for i in range(n):

@@ -1,20 +1,21 @@
-# Dashboard on boot. The watcher is started/stopped from the dashboard and keeps
-# running even if this service restarts. Edit User/paths, then see README-systemd.md
+# Template — deploy/install_service.sh fills in @USER@ @APP@ @TOKEN@ @PORT@ and installs it.
+# The dashboard starts jobs as their own processes; they keep running if this service restarts.
 [Unit]
 Description=clipperyt dashboard
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-User=CHANGE_ME
-WorkingDirectory=/opt/clipperyt
-Environment=PATH=/opt/clipperyt/.venv/bin:/usr/local/bin:/usr/bin:/bin
-Environment=CLIPPER_TOKEN=CHANGE_ME_LONG_RANDOM
-Environment=CLIPPER_PORT=8787
-ExecStart=/opt/clipperyt/.venv/bin/python -u server.py
-# don't kill a recording when the dashboard restarts
+User=@USER@
+WorkingDirectory=@APP@
+Environment=PATH=@APP@/.venv/bin:@APP@/bin:/usr/local/bin:/usr/bin:/bin
+Environment=CLIPPER_TOKEN=@TOKEN@
+Environment=CLIPPER_PORT=@PORT@
+ExecStart=@APP@/.venv/bin/python -u server.py
+# don't kill recordings when the dashboard restarts (jobs are in their own sessions)
 KillMode=process
 Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target

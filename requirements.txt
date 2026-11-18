@@ -1,2 +1,3 @@
 chat-downloader>=0.2.8   # only for past Twitch VOD chat (best effort)
 websockets>=12
+tomli>=2; python_version < "3.11"   # tomllib backport (Ubuntu 22.04)

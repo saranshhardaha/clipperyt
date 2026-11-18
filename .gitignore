@@ -1,11 +1,15 @@
 # local config (may contain twitch_oauth_token) — template is config.example.toml
 config.toml
 config.toml.bak
+config.toml.tmp
+.dashboard_token
 
 # runtime
 .venv/
 models/
 sessions/
+jobs/
+locks/
 logs/
 bin/
 .whisper.cpp/

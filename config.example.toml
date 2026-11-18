@@ -1,4 +1,6 @@
-# clipperyt config — edit this, then run ./run.sh
+# clipperyt config — easiest to edit in the dashboard (Settings tab).
+# [stream] holds the defaults for `clipper.py watch` and the new-job form;
+# dashboard jobs bring their own channels.
 
 [stream]
 # Fill in every platform the streamer is live on. Chat from ALL of them is
@@ -53,11 +55,19 @@ language = "auto"           # "auto" detects per clip (Hindi or English) · or f
 translate = false           # true = English captions (needs a non-turbo model, e.g. ggml-medium.bin)
 
 [render]
-vertical = true             # 1080x1920 Shorts version
-# "blur" = full 16:9 frame over a blurred background, "crop" = centre-cropped to 9:16
-mode = "blur"
+# Output shape:
+#   "9:16-blur"  1080x1920, the whole 16:9 frame across the middle, blurred copy fills top/bottom
+#   "9:16-bars"  1080x1920, the whole 16:9 frame across the middle, black top/bottom
+#   "16:9"       1920x1080, original shape
+#   "9:16-crop"  1080x1920, centre crop (cuts off the sides)
+format = "9:16-blur"
 # "auto" = Mac hardware (videotoolbox) → NVIDIA GPU (nvenc) → CPU (libx264)
 encoder = "auto"
 font_size = 64               # caption size in px on a 1080-wide frame
 font = "auto"               # auto = Kohinoor Devanagari (Mac) / Noto Sans Devanagari (Linux)
 credit = true               # small "@channel on YouTube/Kick" credit burned in at the top
+
+[limits]
+# How many streams can be cut + transcribed + rendered at the same time.
+# Recording is never limited; clipping waits for a free slot. 1 is safest for whisper.
+max_parallel_processing = 1

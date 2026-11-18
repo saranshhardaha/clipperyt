@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>clipperyt</title>
+<style>
+:root{
+  --bg:#0e1014;--card:#171a21;--card2:#1d212a;--line:#2a303c;--fg:#e9ebf1;--mut:#8d95a8;--faint:#5d6578;
+  --acc:#7c9cff;--acc-fg:#0b1020;--ok:#3ecf8e;--warn:#f5a524;--bad:#f2555a;--live:#ff5c62;
+  --pill-live:#3a1518;--pill-wait:#2b2a1a;--pill-work:#16253f;--pill-off:#262b36;--pill-ok:#13301f;
+  --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: light){:root{
+  --bg:#f5f6f8;--card:#fff;--card2:#f0f2f5;--line:#dde1e8;--fg:#151821;--mut:#5f6779;--faint:#9aa1b0;
+  --acc:#3b5bdb;--acc-fg:#fff;--ok:#16a34a;--warn:#b7791f;--bad:#d63c41;--live:#e03131;
+  --pill-live:#ffe3e3;--pill-wait:#fff3d6;--pill-work:#e0e8ff;--pill-off:#eceef2;--pill-ok:#dcf5e5;
+}}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--fg)}
+a{color:var(--acc)}
+header{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.bar{max-width:1240px;margin:0 auto;padding:10px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.logo{font-weight:700;letter-spacing:-.01em;font-size:16px;display:flex;align-items:center;gap:8px}
+.logo i{width:10px;height:10px;border-radius:50%;background:var(--faint);display:inline-block}
+.logo i.on{background:var(--live);box-shadow:0 0 0 4px color-mix(in srgb,var(--live) 25%,transparent)}
+nav{display:flex;gap:2px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:3px}
+nav button{border:0;background:none;padding:6px 12px;border-radius:7px;color:var(--mut)}
+nav button.on{background:var(--card2);color:var(--fg);font-weight:600}
+.chips{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+.chip{font-size:12px;color:var(--mut);border:1px solid var(--line);border-radius:99px;padding:3px 10px;background:var(--card)}
+.chip b{color:var(--fg)}
+main{max-width:1240px;margin:0 auto;padding:16px}
+h2{font-size:15px;margin:0 0 10px}h3{font-size:13px;margin:0 0 8px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.between{justify-content:space-between}
+button,.btn{background:var(--card2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:6px 12px;font:inherit;cursor:pointer;text-decoration:none;display:inline-block}
+button:hover,.btn:hover{border-color:var(--faint)}
+button.pri{background:var(--acc);color:var(--acc-fg);border-color:var(--acc);font-weight:600}
+button.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 50%,var(--line))}
+button.sm,.btn.sm{padding:3px 9px;font-size:12px}
+button:disabled{opacity:.45;cursor:default}
+input,select,textarea{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 9px;width:100%}
+input[type=checkbox]{width:auto;accent-color:var(--acc)}
+input:focus,select:focus,textarea:focus{outline:2px solid color-mix(in srgb,var(--acc) 50%,transparent);border-color:var(--acc)}
+label.f{display:block}label.f>span{display:block;font-size:12px;color:var(--mut);margin-bottom:4px}
+.help{font-size:12px;color:var(--faint);margin-top:3px}
+.pill{display:inline-block;padding:2px 9px;border-radius:99px;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap}
+.s-live{background:var(--pill-live);color:var(--live)}.s-waiting,.s-queued,.s-starting{background:var(--pill-wait);color:var(--warn)}
+.s-processing,.s-downloading,.s-idle{background:var(--pill-work);color:var(--acc)}.s-stopped{background:var(--pill-off);color:var(--mut)}
+.s-done{background:var(--pill-ok);color:var(--ok)}.s-failed{background:var(--pill-live);color:var(--bad)}
+.s-live::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:currentColor;margin-right:5px;vertical-align:1px;animation:blink 1.4s infinite}
+@keyframes blink{50%{opacity:.25}}
+.mut{color:var(--mut)}.faint{color:var(--faint)}.err{color:var(--bad)}.okc{color:var(--ok)}
+.tag{font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--mut);border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;max-height:300px;overflow:auto;font:12px/1.5 var(--mono);white-space:pre-wrap;margin:8px 0 0}
+.grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(360px,1fr))}
+.job{display:flex;flex-direction:column;gap:10px;margin:0}
+.job .name{font-weight:600;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.tile{background:var(--card2);border-radius:8px;padding:7px 9px;min-width:0}
+.tile b{display:block;font-size:17px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile span{font-size:11px;color:var(--mut)}
+.spark{width:100%;height:46px;display:block}
+.spark path.l{fill:none;stroke:var(--acc);stroke-width:1.6}.spark path.a{fill:color-mix(in srgb,var(--acc) 18%,transparent)}
+.prog{height:6px;border-radius:99px;background:var(--card2);overflow:hidden}.prog i{display:block;height:100%;background:var(--acc)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;padding:2px;background:var(--bg)}
+.seg button{border:0;background:none;padding:5px 12px;border-radius:7px;color:var(--mut)}.seg button.on{background:var(--card2);color:var(--fg);font-weight:600}
+.form{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+table{width:100%;border-collapse:collapse}td,th{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{color:var(--mut);font-weight:500;font-size:12px;white-space:nowrap}td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+tr.click{cursor:pointer}tr.click:hover{background:var(--card2)}
+.scroll{overflow-x:auto}
+.clips{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.clip{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:8px;min-width:0}
+.clip video{width:100%;background:#000;border-radius:6px;display:block}
+.clip .t{font-size:12px;color:var(--mut);margin-top:6px;overflow-wrap:anywhere}
+.settings section{margin-bottom:14px}
+.savebar{position:sticky;bottom:0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px;display:flex;gap:10px;align-items:center;box-shadow:0 -6px 20px rgba(0,0,0,.15)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}.dot.ok{background:var(--ok)}.dot.no{background:var(--bad)}
+.meter{height:8px;border-radius:99px;background:var(--card2);overflow:hidden;margin-top:6px}.meter i{display:block;height:100%;background:var(--acc)}
+.empty{padding:28px;text-align:center;color:var(--mut)}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:9px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:calc(100% - 32px)}
+#toast.on{opacity:.95}
+@media (max-width:640px){
+  .grid{grid-template-columns:1fr}.chips{margin-left:0}.tiles{grid-template-columns:repeat(2,1fr)}
+  nav{width:100%}nav button{flex:1;padding:6px 4px}
+  .hide-sm{display:none}
+}
+</style></head><body>
+<header><div class="bar">
+  <div class="logo"><i id="dot"></i>clipperyt</div>
+  <nav id="tabs">
+    <button data-t="jobs" class="on">Jobs</button><button data-t="sessions">Sessions</button>
+    <button data-t="settings">Settings</button><button data-t="system">System</button>
+  </nav>
+  <div class="chips" id="chips"></div>
+</div></header>
+
+<main>
+<!-- ============ JOBS ============ -->
+<div id="v-jobs">
+  <div class="card">
+    <div class="row between"><h2 style="margin:0">New job</h2>
+      <div class="seg" id="kind"><button data-k="watch" class="on">Watch channels</button><button data-k="url">One link</button></div></div>
+    <div id="f-watch" style="margin-top:12px">
+      <div class="form">
+        <label class="f"><span>YouTube handle</span><input id="w-youtube" placeholder="without @"></label>
+        <label class="f"><span>Twitch login</span><input id="w-twitch" placeholder="twitch.tv/…"></label>
+        <label class="f"><span>Kick slug</span><input id="w-kick" placeholder="kick.com/…"></label>
+        <label class="f"><span>Record video from</span><select id="w-from"><option value="youtube">YouTube</option><option value="twitch">Twitch</option><option value="kick">Kick</option></select></label>
+      </div>
+      <div class="help">Chat from every filled-in platform is combined; video is recorded once. The job waits for live, records, clips, then waits for the next stream.</div>
+    </div>
+    <div id="f-url" style="margin-top:12px" hidden>
+      <label class="f"><span>Stream or video link</span><input id="u-url" placeholder="https://www.youtube.com/watch?v=…  ·  twitch.tv/videos/…  ·  kick.com/…"></label>
+      <div class="help">Live or upcoming → records until it ends, then clips. Finished → downloads video + chat replay, then clips.</div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <input id="j-name" placeholder="Name (optional)" style="max-width:240px">
+      <label class="row" style="gap:6px"><input type="checkbox" id="j-auto"> <span>Start when the dashboard starts</span></label>
+      <button class="pri" id="j-add">Start job</button><span id="j-msg" class="err"></span>
+    </div>
+  </div>
+  <div class="row between" style="margin:4px 0 10px"><h2 style="margin:0">Jobs</h2>
+    <button class="sm" id="clear">Clear finished</button></div>
+  <div class="grid" id="jobs"></div>
+</div>
+
+<!-- ============ SESSIONS ============ -->
+<div id="v-sessions" hidden>
+  <div id="s-list" class="card">
+    <h2>Sessions</h2>
+    <div class="scroll"><table><thead><tr><th>Session</th><th>Channel</th><th class="n">Length</th><th class="n">Chat</th>
+      <th class="n hide-sm">Chatters</th><th class="n">Spikes</th><th class="n">Clips</th><th class="n hide-sm">Size</th><th></th></tr></thead>
+      <tbody id="sessions"></tbody></table></div>
+  </div>
+  <div id="s-detail" hidden></div>
+</div>
+
+<!-- ============ SETTINGS ============ -->
+<div id="v-settings" hidden class="settings">
+  <div id="settings"></div>
+  <div class="card"><details id="adv"><summary style="cursor:pointer"><b>Advanced</b> <span class="mut">edit config.toml directly</span></summary>
+    <textarea id="raw" spellcheck="false" style="min-height:360px;margin-top:10px;font:12px/1.5 var(--mono)"></textarea>
+    <div class="row" style="margin-top:8px"><button id="raw-save">Save raw TOML</button><span id="raw-msg" class="mut"></span></div>
+  </details></div>
+  <div class="savebar"><button class="pri" id="set-save">Save settings</button><span id="set-msg" class="mut">Changes apply to the next stream / clip run.</span></div>
+</div>
+
+<!-- ============ SYSTEM ============ -->
+<div id="v-system" hidden><div id="system"></div></div>
+</main>
+<div id="toast"></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const NAMES={youtube:'YouTube',twitch:'Twitch',kick:'Kick'};
+const KIND={watch:'WATCH',url:'LINK',process:'RE-CLIP',cli:'TERMINAL'};
+let tab='jobs',settings=null,dirty=false,curSession=null,openLogs=new Set(),jobsSig='',kind='watch';
+
+async function j(u,o){const r=await fetch(u,o);let b={};try{b=await r.json()}catch(e){}if(!r.ok&&!b.error)b.error='HTTP '+r.status;return b}
+const post=(u,b)=>j(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('on');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('on'),2600)}
+function ago(s){if(!s)return'';const m=Math.round((Date.now()/1000-s)/60);return m<1?'just now':m<60?m+' min':Math.floor(m/60)+'h '+(m%60)+'m'}
+function dur(min){if(min==null)return'–';return min<60?Math.round(min)+'m':Math.floor(min/60)+'h '+String(Math.round(min%60)).padStart(2,'0')+'m'}
+const num=n=>n==null?'–':n>=10000?(n/1000).toFixed(1)+'k':String(n);
+
+// ---------- tabs
+$('tabs').onclick=e=>{const b=e.target.closest('button');if(b)show(b.dataset.t)};
+function show(t){
+  if(tab==='settings'&&t!=='settings'&&dirty&&!confirm('Leave without saving settings?'))return;
+  if(tab!==t)scrollTo(0,0);tab=t;for(const b of $('tabs').children)b.classList.toggle('on',b.dataset.t===t);
+  for(const v of['jobs','sessions','settings','system'])$('v-'+v).hidden=v!==t;
+  if(t==='sessions')loadSessions();if(t==='settings')loadSettings();if(t==='system')loadSystem();
+  history.replaceState(null,'','#'+t+(t==='sessions'&&curSession?'/'+curSession:''));
+}
+
+// ---------- jobs
+$('kind').onclick=e=>{const b=e.target.closest('button');if(!b)return;kind=b.dataset.k;
+  for(const x of $('kind').children)x.classList.toggle('on',x===b);$('f-watch').hidden=kind!=='watch';$('f-url').hidden=kind!=='url'};
+$('j-add').onclick=async()=>{
+  const body={kind,name:$('j-name').value.trim(),autostart:$('j-auto').checked};
+  if(kind==='watch'){body.channels={youtube:$('w-youtube').value,twitch:$('w-twitch').value,kick:$('w-kick').value};body.record_from=$('w-from').value}
+  else body.url=$('u-url').value.trim();
+  $('j-msg').textContent='';const r=await post('/api/jobs',body);
+  if(r.error){$('j-msg').textContent=r.error;return}
+  toast(r.job.name+': '+r.result);$('u-url').value='';$('j-name').value='';refreshJobs();
+};
+$('clear').onclick=async()=>{const r=await post('/api/jobs/clear-finished');toast(r.result||r.error);refreshJobs()};
+
+function spark(arr){
+  const w=300,h=46,max=Math.max(4,...arr),n=arr.length;
+  const pts=arr.map((v,i)=>[(i/(n-1))*w,h-2-(v/max)*(h-6)]);
+  const d=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="chat messages per minute, last 30 minutes, peak ${max}"><path class="a" d="${d} L${w} ${h} L0 ${h} Z"/><path class="l" d="${d}"/></svg>`;
+}
+function target(jb){
+  if(jb.kind==='watch')return Object.entries(jb.channels||{}).map(([p,c])=>`${p===jb.record_from?'● ':''}${NAMES[p]} <b>${esc(c)}</b>`).join(' · ');
+  if(jb.kind==='url')return `<a href="${esc(jb.url)}" target="_blank" rel="noopener">${esc(jb.url)}</a>`;
+  if(jb.kind==='process')return 'session '+esc(jb.session);
+  return esc(jb.state.url||jb.state.session||'');
+}
+function jobCard(jb){
+  const st=jb.state,s=st.status||'stopped',L=jb.live;
+  let body='';
+  if(L){
+    const chat=Object.entries(L.chat).map(([p,n])=>`${NAMES[p]||p} ${num(n)}`).join(' · ');
+    body+=`<div class="tiles">
+      <div class="tile"><b>${dur(L.minutes)}</b><span>recorded</span></div>
+      <div class="tile"><b>${L.gb} GB</b><span>${L.mbps!=null?L.mbps+' Mbps':'on disk'}</span></div>
+      <div class="tile"><b>${L.per_min}</b><span>chat / min</span></div>
+      <div class="tile"><b>${num(Object.values(L.chat).reduce((a,b)=>a+b,0))}</b><span>messages</span></div>
+      <div class="tile"><b>${num(L.chatters)}</b><span>chatters</span></div>
+      <div class="tile"><b>${L.spikes}</b><span>moments so far</span></div></div>
+      ${spark(L.spark)}<div class="row between faint" style="font-size:11px;margin-top:-6px"><span>chat / min · last 30 min</span><span>${esc(chat)}</span></div>`;
+  }
+  if(s==='processing'&&st.clips!=null){const d=st.done||0;
+    body+=`<div><div class="row between" style="font-size:12px"><span>making clips</span><span class="mut">${d} / ${st.clips}</span></div><div class="prog"><i style="width:${st.clips?100*d/st.clips:0}%"></i></div></div>`}
+  if(s==='queued')body+=`<div class="mut">Recorded. Waiting for a free clipping slot (Settings → Limits).</div>`;
+  if(s==='downloading')body+=`<div class="mut">Downloading ${esc(st.step||'')}…</div>`;
+  if(s==='waiting')body+=`<div class="mut">Waiting for the stream to go live · checking every few seconds.</div>`;
+  if(s==='failed')body+=`<div class="err">${esc(st.error||'failed — see log')}</div>`;
+  const run=jb.running,ro=jb.readonly;
+  const acts=[
+    !run&&!ro?`<button class="sm pri" data-a="start">Start</button>`:'',
+    run?`<button class="sm" data-a="stop">Stop</button>`:'',
+    run?`<button class="sm bad" data-a="kill">Kill</button>`:'',
+    `<button class="sm" data-a="log">${openLogs.has(jb.id)?'Hide log':'Log'}</button>`,
+    st.session?`<button class="sm" data-a="open" data-s="${esc(st.session)}">Session ›</button>`:'',
+    !run&&!ro?`<button class="sm bad" data-a="delete">Delete</button>`:'',
+  ].join('');
+  return `<div class="card job" data-id="${esc(jb.id)}">
+    <div class="row between" style="flex-wrap:nowrap"><div class="row" style="min-width:0;flex-wrap:nowrap"><span class="tag">${KIND[jb.kind]||jb.kind}</span><span class="name" title="${esc(jb.name)}">${esc(jb.name)}</span></div>
+      <span class="pill s-${esc(s)}">${esc(s)}</span></div>
+    <div class="mut" style="font-size:12px;overflow-wrap:anywhere">${target(jb)}${st.since?` · <span class="faint">${s} for ${ago(st.since)}</span>`:''}</div>
+    ${body}
+    <div class="row between"><div class="row">${acts}</div>
+      ${jb.kind==='watch'||jb.kind==='url'?`<label class="row faint" style="gap:5px;font-size:12px"><input type="checkbox" data-a="auto" ${jb.autostart?'checked':''}>autostart</label>`:''}</div>
+    ${openLogs.has(jb.id)?`<pre data-log="${esc(jb.id)}">…</pre>`:''}
+  </div>`;
+}
+async function refreshJobs(){
+  const js=await j('/api/jobs');if(!Array.isArray(js))return;
+  const live=js.filter(x=>x.state.status==='live').length,run=js.filter(x=>x.running).length;
+  $('dot').classList.toggle('on',live>0);
+  $('chips').innerHTML=`<span class="chip"><b>${live}</b> live</span><span class="chip"><b>${run}</b> running</span>`+(sysCache?`<span class="chip"><b>${sysCache.disk.free_gb} GB</b> free</span>`:'');
+  const sig=JSON.stringify(js)+[...openLogs].join();
+  if(sig!==jobsSig){
+    jobsSig=sig;
+    const logs={};document.querySelectorAll('pre[data-log]').forEach(p=>logs[p.dataset.log]=[p.textContent,p.scrollTop]);
+    $('jobs').innerHTML=js.map(jobCard).join('')||'<div class="card empty">No jobs yet. Add a channel to watch, or paste a stream link above.</div>';
+    document.querySelectorAll('pre[data-log]').forEach(p=>{const o=logs[p.dataset.log];if(o){p.textContent=o[0];p.scrollTop=o[1]}});
+  }
+  for(const id of openLogs)loadLog(id);
+}
+async function loadLog(id){
+  const p=document.querySelector(`pre[data-log="${CSS.escape(id)}"]`);if(!p)return;
+  const r=await j('/api/jobs/'+id+'/log');const stick=p.scrollTop+p.clientHeight>=p.scrollHeight-20;
+  if(p.textContent!==(r.log||'(empty)')){p.textContent=r.log||'(empty)';if(stick)p.scrollTop=p.scrollHeight}
+}
+$('jobs').onclick=async e=>{
+  const b=e.target.closest('[data-a]');if(!b)return;const id=b.closest('.job').dataset.id,a=b.dataset.a;
+  if(a==='auto')return;
+  if(a==='log'){openLogs.has(id)?openLogs.delete(id):openLogs.add(id);return refreshJobs()}
+  if(a==='open'){curSession=b.dataset.s;return show('sessions')}
+  if(a==='kill'&&!confirm('Kill now? Nothing recorded since the last clip run gets clipped.'))return;
+  if(a==='stop'&&!confirm('Stop this job? It still clips what was recorded.'))return;
+  if(a==='delete'&&!confirm('Delete this job? Its sessions and clips are kept.'))return;
+  const r=await post(`/api/jobs/${id}/${a}`);toast(r.result||r.error);if(a==='delete')openLogs.delete(id);refreshJobs();
+};
+$('jobs').onchange=async e=>{if(e.target.dataset.a!=='auto')return;const id=e.target.closest('.job').dataset.id;
+  const r=await post(`/api/jobs/${id}/autostart`,{on:e.target.checked});toast(r.result||r.error)};
+
+// ---------- sessions
+async function loadSessions(){
+  if(curSession)return openSession(curSession);
+  $('s-list').hidden=false;$('s-detail').hidden=true;
+  const ss=await j('/api/sessions');
+  $('sessions').innerHTML=ss.map(x=>{const s=x.stats;return `<tr class="click" data-id="${esc(x.id)}">
+    <td><b>${esc(x.id)}</b>${x.vod?' <span class="tag">VOD</span>':''}${x.title?`<div class="faint" style="font-size:12px">${esc(x.title).slice(0,60)}</div>`:''}</td>
+    <td>${esc(x.channel)} <span class="mut">${esc(NAMES[x.platform]||x.platform)}</span></td>
+    <td class="n">${dur(s.duration_min)}</td><td class="n">${num(s.chat)}</td><td class="n hide-sm">${num(s.chatters)}</td>
+    <td class="n">${s.spikes}</td><td class="n">${s.clips}${s.failed?` <span class="err">(${s.failed}✗)</span>`:''}</td>
+    <td class="n hide-sm">${s.gb} GB</td><td>${x.busy?`<span class="pill s-${esc(x.busy)}">${esc(x.busy)}</span>`:'<span class="faint">›</span>'}</td></tr>`}).join('')
+    ||'<tr><td colspan=9 class="empty">No sessions yet — they appear when a job starts recording.</td></tr>';
+}
+$('sessions').onclick=e=>{const r=e.target.closest('tr[data-id]');if(r){curSession=r.dataset.id;openSession(curSession);history.replaceState(null,'','#sessions/'+curSession)}};
+let clipSig='';
+async function openSession(id,soft){
+  const d=await j('/api/sessions/'+encodeURIComponent(id));
+  if(d.error){curSession=null;return loadSessions()}
+  $('s-list').hidden=true;$('s-detail').hidden=false;const s=d.stats,m=d.meta;
+  const chat=Object.entries(s.chat_by_platform||{}).map(([p,n])=>`${NAMES[p]||p} ${num(n)}`).join(' · ');
+  const head=`<div class="card">
+    <div class="row between"><div class="row"><button class="sm" id="back">← Sessions</button><h2 style="margin:0">${esc(id)}</h2>${d.busy?`<span class="pill s-${esc(d.busy)}">${esc(d.busy)}</span>`:''}</div>
+      <div class="row"><button class="sm" id="spk">List spikes</button><button class="sm pri" id="reclip" ${d.busy||!s.has_source?'disabled':''}>Re-make clips</button>
+      <button class="sm" id="delsrc" ${d.busy||!s.has_source?'disabled':''}>Free disk (delete video)</button><button class="sm bad" id="delses" ${d.busy?'disabled':''}>Delete</button></div></div>
+    <div class="mut" style="margin:8px 0 12px;overflow-wrap:anywhere">${esc(m.channel||'')} · ${esc(NAMES[m.platform]||m.platform||'')}${m.title?' · '+esc(m.title):''} · started ${esc(m.started||'')}
+      ${m.source_url?` · <a href="${esc(m.source_url)}" target="_blank" rel="noopener">source</a>`:''}${d.clips_md?` · <a href="${d.clips_md}" target="_blank">clips.md</a>`:''}</div>
+    <div class="tiles" style="grid-template-columns:repeat(auto-fill,minmax(120px,1fr))">
+      <div class="tile"><b>${dur(s.duration_min)}</b><span>length</span></div><div class="tile"><b>${num(s.chat)}</b><span>${esc(chat)||'messages'}</span></div>
+      <div class="tile"><b>${num(s.chatters)}</b><span>chatters</span></div><div class="tile"><b>${s.spikes}</b><span>spikes</span></div>
+      <div class="tile"><b>${s.clips}</b><span>clips${s.failed?` · ${s.failed} failed`:''}</span></div><div class="tile"><b>${s.gb} GB</b><span>${s.has_source?'incl. video':'video deleted'}</span></div></div>
+    <div id="spikes"></div>${d.process_log&&d.busy?`<pre>${esc(d.process_log)}</pre>`:''}</div>`;
+  const sig=JSON.stringify(d.clips.map(c=>c.video));
+  const keepClips=soft&&sig===clipSig&&$('clips');const old=keepClips?$('clips'):null;
+  const spikesHtml=soft&&$('spikes')?$('spikes').innerHTML:'';
+  $('s-detail').innerHTML=head+`<div class="card"><h2>Clips</h2><div id="clips-slot"></div></div>`;
+  $('spikes').innerHTML=spikesHtml;
+  if(old){$('clips-slot').replaceWith(old)}else{
+    clipSig=sig;const c=document.createElement('div');c.className='clips';c.id='clips';
+    c.innerHTML=d.clips.map(c=>`<div class="clip">
+      ${c.video?`<video src="${c.video}" controls preload="metadata" playsinline style="aspect-ratio:${c.vertical?'9/16':'16/9'}"></video>`:'<div class="err">render failed — see log</div>'}
+      <div style="margin-top:6px"><b>${esc(c.name)}</b> ${c.score!=null?`<span class="mut">· score ${c.score}${c.messages?` · ${c.messages} msgs`:''}</span>`:''}</div>
+      <div class="t">${esc((c.top||[]).slice(0,3).join(' · '))}</div>
+      <div class="row" style="margin-top:6px">${c.video?`<a class="btn sm" href="${c.video}?download=1">Download</a>`:''}
+      ${c.raw?`<a class="btn sm" href="${c.raw}?download=1">Raw</a>`:''}${c.srt?`<a class="btn sm" href="${c.srt}" target="_blank">Captions</a>`:''}</div></div>`).join('')||'<div class="mut">No clips yet.</div>';
+    $('clips-slot').replaceWith(c);
+  }
+  $('back').onclick=()=>{curSession=null;history.replaceState(null,'','#sessions');loadSessions()};
+  $('spk').onclick=async()=>{$('spikes').innerHTML='<div class="mut" style="margin-top:12px">Finding spikes…</div>';const r=await j(`/api/sessions/${id}/spikes`);
+    $('spikes').innerHTML=r.error?`<div class="err">${esc(r.error)}</div>`:`<div class="scroll" style="margin-top:12px"><table><thead><tr><th>Chat reacts</th><th>Clip starts</th><th class="n">Score</th><th class="n">Msgs</th><th>Chat said</th></tr></thead><tbody>${
+      r.map(x=>`<tr><td>${x.onset}</td><td>${x.clip_start}</td><td class="n">${x.score}</td><td class="n">${x.messages}</td><td class="mut">${esc(x.top.join(' · '))}</td></tr>`).join('')||'<tr><td colspan=5 class="mut">No spikes with the current settings.</td></tr>'}</tbody></table></div>
+      <div class="help">Uses current Settings — tune Spike detection, then Re-make clips.</div>`};
+  $('reclip').onclick=async()=>{const r=await post(`/api/sessions/${id}/process`);toast(r.result||r.error);openSession(id,true)};
+  $('delsrc').onclick=async()=>{if(!confirm('Delete the full recording for this session? Clips stay, but you can no longer re-make them. This cannot be undone.'))return;
+    const r=await post(`/api/sessions/${id}/delete-source`);toast(r.result||r.error);openSession(id,true)};
+  $('delses').onclick=async()=>{if(!confirm('Delete this whole session — recording, chat and clips? This cannot be undone.'))return;
+    const r=await post(`/api/sessions/${id}/delete`);toast(r.result||r.error);curSession=null;loadSessions()};
+}
+
+// ---------- settings
+async function loadSettings(){
+  if(dirty)return;settings=await j('/api/settings');$('raw').value=settings.toml;
+  const bySec={};for(const f of settings.schema){const sec=f.key.split('.')[0];(bySec[sec]=bySec[sec]||[]).push(f)}
+  $('settings').innerHTML=Object.entries(bySec).map(([sec,fs])=>`<section class="card"><h2>${esc(settings.sections[sec]||sec)}</h2><div class="form">${fs.map(field).join('')}</div></section>`).join('');
+  // pre-fill new-job form defaults (only if empty)
+  const v=settings.values;for(const p of['youtube','twitch','kick']){const el=$('w-'+p);if(!el.value&&v['stream.channels.'+p]&&v['stream.channels.'+p]!=='CHANNEL_HANDLE')el.value=v['stream.channels.'+p]}
+  if(v['stream.record_from'])$('w-from').value=v['stream.record_from'];
+}
+function field(f){
+  const v=settings.values[f.key],id='k-'+f.key.replace(/\W/g,'_'),wide=f.type==='list'||f.key==='render.format';
+  let input;
+  if(f.type==='bool')input=`<label class="row" style="gap:8px;padding:6px 0"><input type="checkbox" id="${id}" data-k="${f.key}" ${v?'checked':''}><span>${v?'On':'Off'}</span></label>`;
+  else if(f.type==='enum')input=`<select id="${id}" data-k="${f.key}">${f.options.map(o=>`<option value="${esc(o)}" ${o===v?'selected':''}>${esc((f.labels||{})[o]||o)}</option>`).join('')}</select>`;
+  else if(f.type==='list')input=`<textarea id="${id}" data-k="${f.key}" rows="3">${esc((v||[]).join(', '))}</textarea>`;
+  else input=`<input id="${id}" data-k="${f.key}" type="${f.type==='secret'?'password':(f.type==='int'||f.type==='float')?'number':'text'}" ${f.type==='float'?'step="any"':''} ${f.min!=null?`min="${f.min}"`:''} value="${esc(v??'')}" autocomplete="off">`;
+  return `<label class="f" for="${id}" style="${wide?'grid-column:1/-1':''}"><span>${esc(f.label)}</span>${input}${f.help?`<div class="help">${esc(f.help)}</div>`:''}</label>`;
+}
+$('settings').oninput=e=>{dirty=true;$('set-msg').textContent='Unsaved changes';$('set-msg').className='';
+  if(e.target.type==='checkbox')e.target.nextElementSibling.textContent=e.target.checked?'On':'Off'};
+$('set-save').onclick=async()=>{
+  const values={};document.querySelectorAll('#settings [data-k]').forEach(el=>values[el.dataset.k]=el.type==='checkbox'?el.checked:el.value);
+  const r=await post('/api/settings',{values});
+  $('set-msg').textContent=r.result||r.error;$('set-msg').className=r.error?'err':'okc';
+  if(!r.error){dirty=false;loadSettings()}
+};
+$('raw-save').onclick=async()=>{const r=await post('/api/config',{toml:$('raw').value});$('raw-msg').textContent=r.result||r.error;$('raw-msg').className=r.error?'err':'okc';if(!r.error){dirty=false;loadSettings()}};
+addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue=''}});
+
+// ---------- system
+let sysCache=null;
+async function loadSystem(){
+  const s=await j('/api/system');if(s.error)return;sysCache=s;const t=s.tools,T=s.totals;
+  const tool=(name,ok,detail,hint)=>`<tr><td><span class="dot ${ok?'ok':'no'}"></span>${esc(name)}</td><td class="mut" style="overflow-wrap:anywhere">${esc(detail||'')}${!ok&&hint?`<div class="err">${esc(hint)}</div>`:''}</td></tr>`;
+  const setup=/Darwin/.test(s.platform)?'./setup.sh':'./setup_linux.sh';
+  $('system').innerHTML=`<div class="grid">
+   <div class="card"><h3>Disk</h3><div style="font-size:22px;font-weight:700">${s.disk.free_gb} GB free</div><div class="mut">of ${s.disk.total_gb} GB · ${s.disk.used_pct}% used</div>
+     <div class="meter"><i style="width:${s.disk.used_pct}%;background:${s.disk.used_pct>90?'var(--bad)':s.disk.used_pct>75?'var(--warn)':'var(--acc)'}"></i></div>
+     <div class="help">A 1080p60 stream takes about 3–6 GB an hour. Use “Free disk” on old sessions.</div></div>
+   <div class="card"><h3>All sessions</h3><div class="tiles">
+     <div class="tile"><b>${T.sessions}</b><span>sessions</span></div><div class="tile"><b>${T.hours} h</b><span>recorded</span></div>
+     <div class="tile"><b>${T.clips}</b><span>clips</span></div><div class="tile"><b>${num(T.chat)}</b><span>chat messages</span></div>
+     <div class="tile"><b>${T.gb} GB</b><span>on disk</span></div><div class="tile"><b>${s.load?s.load[0]:'–'}</b><span>load · ${s.cpus} CPUs</span></div></div></div>
+   <div class="card"><h3>Machine</h3><table>
+     <tr><td class="mut">System</td><td>${esc(s.platform)}</td></tr><tr><td class="mut">Python</td><td>${esc(s.python)}</td></tr>
+     <tr><td class="mut">Data folder</td><td style="overflow-wrap:anywhere">${esc(s.home)}</td></tr>
+     <tr><td class="mut">Encoder</td><td>${esc(t.encoder||'–')}</td></tr></table></div>
+   <div class="card" style="grid-column:1/-1"><h3>Tools</h3><table>
+     ${tool('ffmpeg',!!t.ffmpeg.path,t.ffmpeg.version,'Run '+setup)}
+     ${tool('ffmpeg libass (captions + credit)',t.libass.ok,t.libass.ok?'ass filter available':'',`Captions and the credit line can't be burned in. Run ${setup} again.`)}
+     ${tool('streamlink',!!t.streamlink.path,t.streamlink.version,'Run '+setup)}
+     ${tool('yt-dlp',!!t['yt-dlp'].path,t['yt-dlp'].version,'Run '+setup)}
+     ${tool('whisper.cpp',!!t.whisper.path,t.whisper.path,'Captions are skipped. Run '+setup)}
+     ${tool('whisper model',t.model.ok,t.model.ok?`${t.model.path} · ${t.model.mb} MB`:t.model.path,'Captions are skipped. Run '+setup)}
+   </table></div></div>`;
+}
+
+// ---------- loop
+async function tick(){
+  try{
+    if(tab==='jobs')await refreshJobs();
+    else if(tab==='sessions'&&curSession)await openSession(curSession,true);
+  }catch(e){}
+}
+function fromHash(){const h=location.hash.slice(1).split('/');curSession=h[1]||null;
+  show(['jobs','sessions','settings','system'].includes(h[0])?h[0]:'jobs')}
+addEventListener('hashchange',fromHash);fromHash();
+loadSettings();loadSystem().then(refreshJobs);refreshJobs();
+setInterval(tick,3000);setInterval(()=>{if(tab==='sessions'&&!curSession)loadSessions();if(tab==='system')loadSystem();else j('/api/system').then(s=>{if(!s.error)sysCache=s})},20000);
+</script>
+</body></html>
