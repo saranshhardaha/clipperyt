@@ -423,6 +423,7 @@ async function loadSystem(){
      ${tool('ffmpeg libass (captions + credit)',t.libass.ok,t.libass.ok?'ass filter available':'',`Captions and the credit line can't be burned in. Run ${setup} again.`)}
      ${tool('streamlink',!!t.streamlink.path,t.streamlink.version,'Run '+setup)}
      ${tool('yt-dlp',!!t['yt-dlp'].path,t['yt-dlp'].version,'Run '+setup)}
+     ${tool('yt-dlp JS runtime (YouTube)',!!(t['yt-dlp-js']&&t['yt-dlp-js'].runtime),t['yt-dlp-js']&&t['yt-dlp-js'].runtime,/Darwin/.test(s.platform)?'YouTube downloads fail (“No video formats found”). Run: brew install deno && brew upgrade yt-dlp':'YouTube downloads fail (“No video formats found”). Run ./update.sh')}
      ${tool('whisper.cpp',!!t.whisper.path,t.whisper.path,'Captions are skipped. Run '+setup)}
      ${tool('whisper model',t.model.ok,t.model.ok?`${t.model.path} · ${t.model.mb} MB`:t.model.path,'Captions are skipped. Run '+setup)}
    </table></div></div>`;

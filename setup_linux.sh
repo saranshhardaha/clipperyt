@@ -51,7 +51,11 @@ if [ -x .venv/bin/python ] && [ "$(readlink -f .venv/bin/python)" != "$(readlink
 fi
 [ -d .venv ] || "$PYBIN" -m venv .venv
 .venv/bin/pip install -q --upgrade pip
-.venv/bin/pip install -q --upgrade -r requirements.txt streamlink yt-dlp
+# yt-dlp[default] brings yt-dlp-ejs (YouTube challenge solver); deno runs it
+.venv/bin/pip install -q --upgrade -r requirements.txt streamlink "yt-dlp[default]"
+
+echo "==> deno (JS runtime yt-dlp needs for YouTube)"
+./deploy/install_deno.sh
 
 echo "==> whisper.cpp → bin/whisper-cli"
 if [ ! -x bin/whisper-cli ]; then

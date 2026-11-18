@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 command -v brew >/dev/null || { echo "Install Homebrew first: https://brew.sh"; exit 1; }
 
 echo "==> brew packages"
-brew install ffmpeg streamlink yt-dlp whisper-cpp python@3.12
+brew install ffmpeg streamlink yt-dlp deno whisper-cpp python@3.12   # deno: yt-dlp's YouTube challenge solver
 
 echo "==> ffmpeg with libass (burns in captions + the streamer credit)"
 if ffmpeg -hide_banner -filters 2>/dev/null | grep -qE '^\s*\S+\s+ass\s'; then

@@ -79,6 +79,11 @@ BOT_HELP = ("YouTube is asking for a sign-in (\"confirm you're not a bot\") — 
             "upload it in Settings → Stream defaults → YouTube cookies. See README → \"YouTube asks to sign in\".")
 
 
+NO_FORMATS_HELP = ("yt-dlp found the video but no downloadable formats — it can't solve YouTube's JavaScript "
+                   "challenge. It needs a JS runtime (deno) and yt-dlp[default]. Linux: run ./update.sh "
+                   "(installs both). macOS: brew install deno && brew upgrade yt-dlp.")
+
+
 def cookies_file(s: dict) -> Path | None:
     raw = str(s.get("youtube_cookies") or "").strip()
     if not raw:
@@ -590,11 +595,15 @@ def platform_of(url: str) -> str:
 
 def probe(url: str) -> dict:
     """yt-dlp metadata: live_status (is_live / is_upcoming / was_live / not_live), channel…"""
-    r = subprocess.run(["yt-dlp", *YTDLP_AUTH, "-J", "--no-warnings", "--skip-download", url],
-                       capture_output=True, text=True, timeout=120)
+    # --ignore-no-formats-error: we only need live_status/channel here; a live stream is recorded
+    # by streamlink, so yt-dlp failing to list formats (e.g. no JS runtime) mustn't stop it
+    r = subprocess.run(["yt-dlp", *YTDLP_AUTH, "-J", "--no-warnings", "--skip-download",
+                        "--ignore-no-formats-error", url], capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
         if any(b in r.stderr for b in BOT_CHECK):
             raise SystemExit(BOT_HELP)
+        if "No video formats found" in r.stderr:
+            raise SystemExit(NO_FORMATS_HELP)
         raise SystemExit(f"yt-dlp couldn't read {url}:\n{r.stderr.strip()[-500:]}")
     return json.loads(r.stdout)
 
@@ -688,10 +697,16 @@ def cmd_vod(url: str, plat: str, name: str, info: dict, job: str | None = None) 
     if not any((session / f).exists() for f in ("stream.mp4", "stream.mkv")):
         set_state("downloading", session=session.name, step="video")
         log("downloading video (up to 1080p) …")
-        r = subprocess.run(["yt-dlp", *YTDLP_AUTH, "--no-warnings", "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
-                            "--merge-output-format", "mp4", "-o", str(session / "stream.%(ext)s"), url])
+        r = subprocess.run(["yt-dlp", *YTDLP_AUTH, "--no-warnings", "--no-progress", "-f",
+                            "bv*[height<=1080]+ba/b[height<=1080]/b", "--merge-output-format", "mp4",
+                            "-o", str(session / "stream.%(ext)s"), url], stderr=subprocess.PIPE, text=True)
         if r.returncode != 0:
-            raise SystemExit("video download failed")
+            err = r.stderr or ""
+            if "No video formats found" in err or "Requested format is not available" in err:
+                raise SystemExit(NO_FORMATS_HELP)
+            if any(b in err for b in BOT_CHECK):
+                raise SystemExit(BOT_HELP)
+            raise SystemExit("video download failed: " + (err.strip().splitlines() or ["?"])[-1][:300])
     cmd_process(session)
     set_state("idle")
 
@@ -734,6 +749,8 @@ def cmd_doctor() -> None:
             ("ffmpeg libass", t["libass"]["ok"], "captions + credit burn-in", True),
             ("streamlink", bool(t["streamlink"]["path"]), t["streamlink"]["version"] or "missing", True),
             ("yt-dlp", bool(t["yt-dlp"]["path"]), t["yt-dlp"]["version"] or "missing", True),
+            ("yt-dlp JS", bool(t["yt-dlp-js"]["runtime"]), t["yt-dlp-js"]["runtime"] or
+             "no JS runtime — YouTube downloads fail (No video formats found). Linux: ./update.sh · Mac: brew install deno", False),
             ("whisper.cpp", bool(t["whisper"]["path"]), t["whisper"]["path"] or "missing", False),
             ("whisper model", t["model"]["ok"], t["model"]["path"], False)]
     for name, good, detail, required in rows:

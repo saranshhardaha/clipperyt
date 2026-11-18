@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -216,6 +217,18 @@ def _version(cmd: list[str]) -> str | None:
     return line[0][:80] if line else ""
 
 
+def ytdlp_js() -> dict:
+    """yt-dlp's JS runtime (deno…) + challenge solver — needed for YouTube formats."""
+    try:
+        r = subprocess.run(["yt-dlp", "-v"], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return {"runtime": None}
+    m = re.search(r"JS runtimes: (.+)", r.stderr + r.stdout)
+    rt = m[1].strip() if m and "none" not in m[1].lower() else None
+    ejs = "yt_dlp_ejs" in (r.stderr + r.stdout)
+    return {"runtime": f"{rt}{'' if ejs else ' (yt-dlp-ejs missing)'}" if rt else None, "ejs": ejs}
+
+
 def tools() -> dict:
     """Which external tools exist + versions. Cached 10 min (each check spawns a process)."""
     if _sys_cache.get("t", 0) > time.time() - 600:
@@ -238,6 +251,7 @@ def tools() -> dict:
         "streamlink": {"path": which("streamlink"),
                        "version": _version(["streamlink", "--version"]) if which("streamlink") else None},
         "yt-dlp": {"path": which("yt-dlp"), "version": _version(["yt-dlp", "--version"]) if which("yt-dlp") else None},
+        "yt-dlp-js": ytdlp_js() if which("yt-dlp") else {"runtime": None},
         "whisper": {"path": which(wbin) or (wbin if Path(wbin).exists() else None)},
         "model": {"path": str(model), "ok": model.exists(),
                   "mb": round(model.stat().st_size / 1e6) if model.exists() else None},

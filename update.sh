@@ -41,7 +41,8 @@ changed() { [ "$OLD" != "$NEW" ] && git diff --name-only "$OLD" "$NEW" | grep -q
 
 echo "==> python packages"
 if [ "$(uname)" = "Linux" ]; then
-  "$PY" -m pip install -q --upgrade -r requirements.txt streamlink yt-dlp  # Linux keeps these in the venv
+  "$PY" -m pip install -q --upgrade -r requirements.txt streamlink "yt-dlp[default]"  # Linux keeps these in the venv
+  ./deploy/install_deno.sh   # JS runtime yt-dlp needs for YouTube ("No video formats found" without it)
 else
   "$PY" -m pip install -q -r requirements.txt
   if [ "$UPGRADE_TOOLS" = 1 ] && command -v brew >/dev/null; then
