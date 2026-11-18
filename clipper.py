@@ -407,10 +407,20 @@ def adopt_dir(src: Path, dst: Path) -> None:
     try:
         src.rename(dst)
         return
-    except OSError:
-        pass
-    for f in src.iterdir():
-        os.rename(f, dst / f.name)
+    except OSError as e:
+        err = e
+    # NFS may report an error for a rename that actually happened (retried request) —
+    # check what's really on disk instead of trusting the error
+    if not src.exists() and dst.is_dir():
+        return
+    for f in list(src.iterdir()) if src.is_dir() else []:
+        try:
+            os.rename(f, dst / f.name)
+        except FileNotFoundError:
+            if not (dst / f.name).exists():  # neither here nor there → real problem
+                raise
+    if not (dst / "stream.ts").exists():
+        raise RuntimeError(f"couldn't move recording into {dst}: {err}")
     try:
         src.rmdir()
     except OSError:
