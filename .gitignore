@@ -3,6 +3,8 @@ config.toml
 config.toml.bak
 config.toml.tmp
 .dashboard_token
+cookies*.txt
+*.cookies.txt
 
 # runtime
 .venv/

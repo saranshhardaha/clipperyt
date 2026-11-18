@@ -22,6 +22,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -382,7 +383,34 @@ class H(BaseHTTPRequestHandler):
         return False
 
     # -- routes
+    def safely(self, fn) -> None:
+        """Any exception → JSON 500 with the reason (instead of a dropped connection,
+        which browsers only show as net::ERR_EMPTY_RESPONSE)."""
+        try:
+            fn()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as e:
+            traceback.print_exc()
+            msg = f"{type(e).__name__}: {e}"
+            if isinstance(e, PermissionError):
+                msg += (f" — the dashboard runs as user '{_user()}', which can't write there. "
+                        "Fix: sudo chown -R " + _user() + f" {HOME}")
+            try:
+                self.send(500, {"error": msg})
+            except Exception:
+                pass
+
     def do_GET(self):
+        self.safely(self._get)
+
+    def do_HEAD(self):
+        self.safely(self._get)
+
+    def do_POST(self):
+        self.safely(self._post)
+
+    def _get(self):
         if not self.authed():
             return self.send(401, "Unauthorized — open /?token=YOUR_TOKEN once", "text/plain")
         clipper.load_cfg()  # cheap; picks up [storage] changes made by hand
@@ -415,14 +443,13 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/settings":
             return self.send(200, get_settings())
         if path == "/api/system":
-            return self.send(200, stats.system_stats(sessions()))
+            return self.send(200, {**stats.system_stats(sessions()), "user": _user(),
+                                   "write_problems": write_problems()})
         if path.startswith("/files/"):
             return self.file(unquote(path[len("/files/"):]))
         self.send(404, {"error": "not found"})
 
-    do_HEAD = do_GET
-
-    def do_POST(self):
+    def _post(self):
         if not self.authed():
             return self.send(401, {"error": "unauthorized"})
         clipper.load_cfg()
@@ -547,6 +574,23 @@ class H(BaseHTTPRequestHandler):
                 pass
 
 
+def _user() -> str:
+    try:
+        import pwd
+        return pwd.getpwuid(os.geteuid()).pw_name
+    except Exception:
+        return str(os.geteuid())
+
+
+def write_problems() -> list[str]:
+    """Folders the dashboard/jobs must be able to write to but can't (e.g. setup ran with sudo)."""
+    out = []
+    for d in (HOME, JOBS, clipper.LOGS, clipper.LOCKS, clipper.DEFAULT_SESSIONS, clipper.SESSIONS, clipper.CONFIG):
+        if d.exists() and not os.access(d, os.W_OK):
+            out.append(str(d))
+    return out
+
+
 def main() -> None:
     host = os.environ.get("CLIPPER_HOST", "0.0.0.0")
     port = int(os.environ.get("CLIPPER_PORT", "8787"))
@@ -554,6 +598,10 @@ def main() -> None:
     for d in (clipper.DEFAULT_SESSIONS, JOBS, clipper.LOGS):
         d.mkdir(parents=True, exist_ok=True)
     mover.cleanup_partial()
+    bad = write_problems()
+    if bad:
+        print(f"!! user '{_user()}' can't write to: {', '.join(bad)}\n"
+              f"   creating jobs will fail. Fix: sudo chown -R {_user()} {HOME}", flush=True)
     autostart()
     srv = ThreadingHTTPServer((host, port), H)
     srv.daemon_threads = True

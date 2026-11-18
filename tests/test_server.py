@@ -123,6 +123,17 @@ class Api(unittest.TestCase):
         self.assertEqual(call(p, "/api/settings", {"values": {"render.format": "x"}})[0], 400)
         self.assertTrue((HOME / "config.toml.bak").exists())
 
+    def test_handler_errors_return_json(self):
+        orig = server.create_job
+        server.create_job = lambda data: (_ for _ in ()).throw(PermissionError(13, "Permission denied", "/x/jobs"))
+        try:
+            code, r = call(self.port, "/api/jobs", {"kind": "url", "url": "https://youtu.be/x"})
+        finally:
+            server.create_job = orig
+        self.assertEqual(code, 500)
+        self.assertIn("PermissionError", r["error"])
+        self.assertIn("chown", r["error"])
+
     def test_files_no_traversal(self):
         self.assertEqual(call(self.port, "/files/../config.toml")[0], 404)
 

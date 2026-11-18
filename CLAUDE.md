@@ -26,6 +26,8 @@ Records a YouTube / Twitch / Kick live stream and its chat with no accounts or A
 - Layout: `<recordings>/<channel-slug>/<session-id>/`, where the id is unique across all folders. Flat `<root>/<id>` sessions from before still work (`iter_sessions`, `find_session`), and the dashboard tags them UNSORTED; a move files them under their channel.
 - Signals: `graceful_signals()` re-enables SIGINT. A dashboard started in the background passes SIG_IGN down, and then "Stop" silently did nothing.
 - `update.sh`: git pull --ff-only, pip, reload the dashboard (systemd / LaunchAgent / manual), restart jobs that are only `waiting`, then `doctor`. `--upgrade-tools` runs brew upgrade on macOS. It's bash 3.2-safe.
+- Errors: `H.safely()` turns any handler exception into a JSON 500 instead of a dropped connection (seen as `net::ERR_EMPTY_RESPONSE` on Linux when the app folder belonged to root). `write_problems()` feeds a warning banner.
+- YouTube bot check: `youtube_cookies` (a Netscape cookies.txt) or `cookies_from_browser`. These go to every yt-dlp call (`YTDLP_AUTH`, passed to chat_youtube via env `CLIPPER_YTDLP_AUTH`) and to streamlink as `--http-cookie`. `probe()` turns the bot-check stderr into `BOT_HELP`.
 - Storage: `[storage] sessions_dir` is where new recordings go (`clipper.SESSIONS`, applied by `load_cfg()`). `also_scan` lists older folders, auto-filled when the folder changes.
   - `session_roots()` / `find_session(sid)` search every folder. Always look sessions up by id through them; never use `SESSIONS / sid`.
   - `check_dir(p, create)`: at record time a custom folder must already exist, so an unmounted drive never gets written to the internal disk. Watch jobs retry on `StorageUnavailable`.

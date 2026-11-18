@@ -77,6 +77,13 @@ M=models/ggml-large-v3-turbo-q5_0.bin
 [ -f "$M" ] || curl -L --fail -o "$M" \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin
 
+# Ran as `sudo ./setup_linux.sh`? Then everything above is owned by root, and a dashboard
+# running as you couldn't create jobs. Hand the folder back to the real user.
+if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+  chown -R "$SUDO_USER": .
+  echo "==> files owned by $SUDO_USER"
+fi
+
 echo "==> check"
 .venv/bin/python clipper.py doctor || true
 

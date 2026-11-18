@@ -142,6 +142,15 @@ When you wake up, open `sessions/<date>/clips.md`. It lists every clip with its 
 - **Twitch ads:** Twitch inserts ads into the stream itself for viewers who aren't logged in. `twitch_disable_ads = true` (the default) keeps them out of the recording, but the gameplay during the ad is still missing. If an account with Turbo or a sub to the channel is available, put its token in `twitch_oauth_token` and there won't be any ads at all.
 - **YouTube ads** are shown by the viewer's player and aren't part of the stream, so recordings don't contain them.
 - **Gaps in the recording** (skipped ads, network stalls) don't break clip timing: `timeline.tsv` logs file size every second, and clips get cut by real time.
+- **YouTube asks to sign in ("confirm you're not a bot"):** YouTube does this to some IPs, sometimes for hours.
+  - Symptoms: a **One link** job fails with that message, or a watch job never goes live while the channel is live (streamlink then reports "No playable streams").
+  - Fix:
+    1. Log in to YouTube in a browser. A spare account is best.
+    2. Export the cookies as `cookies.txt` with a "cookies.txt" browser extension.
+    3. Put the file in the app folder.
+    4. Set **Settings → Stream defaults → YouTube cookies file** to it.
+  - yt-dlp and streamlink both use it. `cookies*.txt` is gitignored. The file is your login, so keep it private.
+- **Creating a job fails on Linux (`net::ERR_EMPTY_RESPONSE`, or "PermissionError"):** the dashboard's user can't write to the app folder. This usually means setup ran with `sudo`. Fix it with `sudo chown -R <user> /path/to/clipperyt`. The current `setup_linux.sh` and `install_service.sh` do this for you, and the dashboard warns about it on the Jobs and System tabs.
 - **Kick recording fails:** run `streamlink --plugins` to check for `kick`. If it's missing, set `recorder = "yt-dlp"`.
 - **Kick chat says "couldn't read chatroom id":** Kick's Cloudflare blocked the lookup. Open `https://kick.com/api/v2/channels/<slug>` in a browser, copy `"chatroom":{"id":…}` into `kick_chatroom_id`.
 - **Kick chat connects but stays empty:** Kick may have moved off Pusher. Update `PUSHER_URL` in `chat_kick.py`.

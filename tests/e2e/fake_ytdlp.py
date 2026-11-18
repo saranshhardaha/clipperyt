@@ -4,7 +4,10 @@ import json, os, shutil, sys
 from pathlib import Path
 args = sys.argv[1:]
 work = Path(os.environ["E2E_WORK"])
-if "-J" in args:
+url = args[-1]
+if "-J" in args and "LIVEVIDEO" in url:
+    print(json.dumps({"live_status": "is_live", "uploader_id": "@liveguy", "title": "Live now"}))
+elif "-J" in args:
     print(json.dumps({"live_status": "was_live", "uploader_id": "@vodguy", "title": "Old stream", "duration": 90}))
 elif "--write-subs" in args:
     base = args[args.index("-o") + 1]

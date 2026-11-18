@@ -71,6 +71,8 @@ Linux)
   fi
   TOKEN="$(token)"
   RUN_USER="${SUDO_USER:-$(id -un)}"
+  # the service user must own the app folder (jobs/, logs/, sessions/, config.toml) or creating jobs fails
+  $SUDO chown -R "$RUN_USER": "$APP"
   sed -e "s|@USER@|$RUN_USER|g" -e "s|@APP@|$APP|g" -e "s|@TOKEN@|$TOKEN|g" -e "s|@PORT@|$PORT|g" \
     "$APP/deploy/clipperyt.service" | $SUDO tee "$UNIT" >/dev/null
   $SUDO chmod 600 "$UNIT"  # holds the token

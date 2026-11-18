@@ -28,6 +28,13 @@ SCHEMA: list[dict] = [
      "help": "The ad isn't recorded; the stream underneath it is lost either way for logged-out viewers."},
     {"key": "stream.options.twitch_oauth_token", "type": "secret", "label": "Twitch OAuth token (optional)",
      "help": "From an account with Turbo or a sub → no ads at all. twitch.tv → DevTools → Cookies → auth-token."},
+    {"key": "stream.options.youtube_cookies", "type": "str", "label": "YouTube cookies file (optional)",
+     "help": "Path to a cookies.txt exported from a browser logged in to YouTube (a spare account is best). "
+             "Needed when YouTube says \"confirm you're not a bot\". Relative paths are inside the data folder."},
+    {"key": "stream.options.cookies_from_browser", "type": "enum", "options": ["", "chrome", "firefox", "safari", "brave", "edge"],
+     "labels": {"": "off"}, "label": "…or read cookies from a browser",
+     "help": "Mac only, for yt-dlp (not streamlink). Chrome may show a Keychain prompt; Safari needs Full Disk Access. "
+             "A cookies file is more reliable for overnight runs."},
     {"key": "stream.options.kick_chatroom_id", "type": "int", "optional": True, "label": "Kick chatroom id (optional)",
      "help": "Only if the automatic lookup gets blocked by Cloudflare (see README)."},
 

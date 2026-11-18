@@ -25,6 +25,11 @@ twitch_disable_ads = true
 # Twitch only, optional: OAuth token of an account with Turbo or a sub to this
 # channel → no ads at all, nothing lost. (twitch.tv → DevTools → Cookies → auth-token)
 twitch_oauth_token = ""
+# YouTube "confirm you're not a bot"? Export cookies.txt from a browser logged in to YouTube
+# (a spare account is best) and put its path here. Used by yt-dlp and streamlink.
+youtube_cookies = ""
+# …or let yt-dlp read them from a browser on this Mac: "chrome", "firefox", "safari", "brave", "edge"
+cookies_from_browser = ""
 # Kick only: set this if the chatroom id lookup gets blocked (see README)
 # kick_chatroom_id = 123456
 

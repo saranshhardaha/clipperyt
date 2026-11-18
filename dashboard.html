@@ -120,6 +120,7 @@ tr.click{cursor:pointer}tr.click:hover{background:var(--card2)}
       <button class="pri" id="j-add">Start job</button><span id="j-msg" class="err"></span>
     </div>
   </div>
+  <div id="permwarn"></div>
   <div class="row between" style="margin:4px 0 10px"><h2 style="margin:0">Jobs</h2>
     <button class="sm" id="clear">Clear finished</button></div>
   <div class="grid" id="jobs"></div>
@@ -160,7 +161,7 @@ const NAMES={youtube:'YouTube',twitch:'Twitch',kick:'Kick'};
 const KIND={watch:'WATCH',url:'LINK',process:'RE-CLIP',cli:'TERMINAL'};
 let tab='jobs',settings=null,dirty=false,curSession=null,openLogs=new Set(),jobsSig='',kind='watch';
 
-async function j(u,o){const r=await fetch(u,o);let b={};try{b=await r.json()}catch(e){}if(!r.ok&&!b.error)b.error='HTTP '+r.status;return b}
+async function j(u,o){let r;try{r=await fetch(u,o)}catch(e){return{error:'dashboard not reachable ('+e.message+')'}}let b={};try{b=await r.json()}catch(e){}if(!r.ok&&!b.error)b.error='HTTP '+r.status;return b}
 const post=(u,b)=>j(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});
 function toast(m){const t=$('toast');t.textContent=m;t.classList.add('on');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('on'),2600)}
 function ago(s){if(!s)return'';const m=Math.round((Date.now()/1000-s)/60);return m<1?'just now':m<60?m+' min':Math.floor(m/60)+'h '+(m%60)+'m'}
@@ -383,11 +384,14 @@ addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue='
 
 // ---------- system
 let sysCache=null;
+function permBanner(s){$('permwarn').innerHTML=s&&s.write_problems&&s.write_problems.length?`<div class="card" style="border-color:var(--bad)"><b class="err">New jobs will fail:</b> the dashboard (user ${esc(s.user)}) can't write to ${s.write_problems.map(esc).join(', ')}. Fix: <code>sudo chown -R ${esc(s.user)} ${esc(s.home)}</code></div>`:''}
 async function loadSystem(){
-  const s=await j('/api/system');if(s.error)return;sysCache=s;const t=s.tools,T=s.totals;
+  const s=await j('/api/system');if(s.error)return;sysCache=s;permBanner(s);const t=s.tools,T=s.totals;
   const tool=(name,ok,detail,hint)=>`<tr><td><span class="dot ${ok?'ok':'no'}"></span>${esc(name)}</td><td class="mut" style="overflow-wrap:anywhere">${esc(detail||'')}${!ok&&hint?`<div class="err">${esc(hint)}</div>`:''}</td></tr>`;
   const setup=/Darwin/.test(s.platform)?'./setup.sh':'./setup_linux.sh';
-  $('system').innerHTML=`<div class="grid">
+  $('system').innerHTML=(s.write_problems&&s.write_problems.length?`<div class="card" style="border-color:var(--bad)"><b class="err">Can't write to some folders</b>
+     <div class="mut" style="margin-top:6px">The dashboard runs as <b>${esc(s.user)}</b> but can't write to: ${s.write_problems.map(esc).join(', ')}. Creating jobs will fail until you run:</div>
+     <pre>sudo chown -R ${esc(s.user)} ${esc(s.home)}</pre></div>`:'')+`<div class="grid">
    ${s.disks.map(k=>k.missing?`<div class="card"><h3>${esc(k.label)}</h3><div class="err" style="font-weight:600">Not available</div><div class="mut" style="overflow-wrap:anywhere">${esc(k.path)}</div><div class="help">Drive not connected? Jobs wait until it's back. Change it in Settings → Storage.</div></div>`:
      `<div class="card"><h3>${esc(k.label)} disk</h3><div style="font-size:22px;font-weight:700">${k.free_gb} GB free</div><div class="mut">of ${k.total_gb} GB · ${k.used_pct}% used</div>
      <div class="meter"><i style="width:${k.used_pct}%;background:${k.used_pct>90?'var(--bad)':k.used_pct>75?'var(--warn)':'var(--acc)'}"></i></div>
@@ -421,6 +425,6 @@ function fromHash(){const h=location.hash.slice(1).split('/');curSession=h[1]||n
   show(['jobs','sessions','settings','system'].includes(h[0])?h[0]:'jobs')}
 addEventListener('hashchange',fromHash);fromHash();
 loadSettings();loadSystem().then(refreshJobs);refreshJobs();
-setInterval(tick,3000);setInterval(()=>{if(tab==='sessions'&&!curSession)loadSessions();if(tab==='system')loadSystem();else j('/api/system').then(s=>{if(!s.error)sysCache=s})},20000);
+setInterval(tick,3000);setInterval(()=>{if(tab==='sessions'&&!curSession)loadSessions();if(tab==='system')loadSystem();else j('/api/system').then(s=>{if(!s.error){sysCache=s;permBanner(s)}})},20000);
 </script>
 </body></html>

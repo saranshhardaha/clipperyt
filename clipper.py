@@ -62,10 +62,56 @@ def load_cfg() -> dict:
     for sec in ("stream", "spikes", "clip", "captions", "render", "limits", "storage"):
         cfg.setdefault(sec, {})
     cfg["stream"].update(cfg["stream"].pop("options", {}))  # flatten [stream.options]
-    global SESSIONS, EXTRA_ROOTS
+    global SESSIONS, EXTRA_ROOTS, YTDLP_AUTH
+    YTDLP_AUTH = ytdlp_cookie_args(cfg["stream"])
+    os.environ["CLIPPER_YTDLP_AUTH"] = json.dumps(YTDLP_AUTH)  # for chat_youtube.py (a child process)
     SESSIONS = resolve_dir(cfg["storage"].get("sessions_dir", ""))
     EXTRA_ROOTS = [resolve_dir(p) for p in cfg["storage"].get("also_scan", []) if str(p).strip()]
     return cfg
+
+
+# ---------------------------------------------------------------- YouTube cookies (bot check)
+
+YTDLP_AUTH: list[str] = []
+BOT_CHECK = ("confirm you", "not a bot", "Sign in to confirm")
+BOT_HELP = ("YouTube is asking for a sign-in (\"confirm you're not a bot\") — it does this to some IPs. "
+            "Fix: export cookies.txt from a browser logged in to YouTube (a spare account is best) and set "
+            "Settings → Stream defaults → YouTube cookies file. See README → \"YouTube asks to sign in\".")
+
+
+def cookies_file(s: dict) -> Path | None:
+    raw = str(s.get("youtube_cookies") or "").strip()
+    if not raw:
+        return None
+    p = Path(os.path.expanduser(raw))
+    p = p if p.is_absolute() else HOME / p
+    return p if p.is_file() else None
+
+
+def ytdlp_cookie_args(s: dict) -> list[str]:
+    f = cookies_file(s)
+    if f:
+        return ["--cookies", str(f)]
+    b = str(s.get("cookies_from_browser") or "").strip()
+    return ["--cookies-from-browser", b] if b else []
+
+
+def streamlink_cookie_args(s: dict) -> list[str]:
+    """YouTube cookies from the cookies.txt (Netscape format) as --http-cookie name=value."""
+    f = cookies_file(s)
+    if not f:
+        return []
+    out = []
+    for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("#HttpOnly_"):
+            line = line[len("#HttpOnly_"):]
+        parts = line.split("\t")
+        if line.startswith("#") or len(parts) != 7:
+            continue
+        domain, name, value = parts[0], parts[5], parts[6]
+        if domain.lstrip(".").endswith("youtube.com") and name:
+            out.append(f"--http-cookie={name}={value}")
+    return out
 
 
 # ---------------------------------------------------------------- storage (sessions on another drive)
@@ -313,12 +359,14 @@ def recorder_cmd(s: dict, out: Path) -> list[str]:
     p = record_platform(s)
     url = s.get("url") or stream_url(p, channels(s)[p])
     if s.get("recorder", "streamlink") == "yt-dlp":
-        return ["yt-dlp", "--wait-for-video", str(s.get("retry_seconds", 30)),
+        return ["yt-dlp", *YTDLP_AUTH, "--wait-for-video", str(s.get("retry_seconds", 30)),
                 "--hls-use-mpegts", "--no-part", "--no-progress",
                 "-f", "best" if s.get("quality", "best") == "best" else s["quality"],
                 "-o", str(out), url]
     cmd = ["streamlink", "--retry-streams", str(s.get("retry_seconds", 30)), "--retry-max", "0",
            "--force", "--hls-live-edge", "2", "-o", str(out)]
+    if p == "youtube":
+        cmd += streamlink_cookie_args(s)
     if p == "twitch":
         # drop Twitch's stitched-in ad segments; timeline.tsv keeps clips in sync across the gap
         if s.get("twitch_disable_ads", True):
@@ -542,15 +590,18 @@ def platform_of(url: str) -> str:
 
 def probe(url: str) -> dict:
     """yt-dlp metadata: live_status (is_live / is_upcoming / was_live / not_live), channel…"""
-    r = subprocess.run(["yt-dlp", "-J", "--no-warnings", "--skip-download", url],
+    r = subprocess.run(["yt-dlp", *YTDLP_AUTH, "-J", "--no-warnings", "--skip-download", url],
                        capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
+        if any(b in r.stderr for b in BOT_CHECK):
+            raise SystemExit(BOT_HELP)
         raise SystemExit(f"yt-dlp couldn't read {url}:\n{r.stderr.strip()[-500:]}")
     return json.loads(r.stdout)
 
 
 def cmd_run(url: str, wait_name: str = "_waiting", job: str | None = None) -> None:
     plat = platform_of(url)
+    load_cfg()  # cookies for yt-dlp
     info = probe(url)
     status = info.get("live_status") or ("is_live" if info.get("is_live") else "not_live")
     name = (info.get("uploader_id") or info.get("channel") or info.get("uploader") or "streamer").lstrip("@")
@@ -571,7 +622,7 @@ def youtube_replay(url: str, session: Path, out: Path) -> int:
     """Chat replay via yt-dlp (maintained) → offset-ms TSV. Returns message count."""
     import chat_youtube
     base = session / "chatreplay"
-    subprocess.run(["yt-dlp", "--no-warnings", "--skip-download", "--write-subs",
+    subprocess.run(["yt-dlp", *YTDLP_AUTH, "--no-warnings", "--skip-download", "--write-subs",
                     "--sub-langs", "live_chat", "-o", str(base), url])
     src = next(session.glob("chatreplay*.live_chat.json"), None)
     if not src:
@@ -637,7 +688,7 @@ def cmd_vod(url: str, plat: str, name: str, info: dict, job: str | None = None) 
     if not any((session / f).exists() for f in ("stream.mp4", "stream.mkv")):
         set_state("downloading", session=session.name, step="video")
         log("downloading video (up to 1080p) …")
-        r = subprocess.run(["yt-dlp", "--no-warnings", "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
+        r = subprocess.run(["yt-dlp", *YTDLP_AUTH, "--no-warnings", "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
                             "--merge-output-format", "mp4", "-o", str(session / "stream.%(ext)s"), url])
         if r.returncode != 0:
             raise SystemExit("video download failed")
@@ -688,6 +739,16 @@ def cmd_doctor() -> None:
     for name, good, detail, required in rows:
         print(f"  {'ok ' if good else ('!! ' if required else '-- ')} {name:14s} {detail}")
         ok = ok and (good or not required)
+    cfg = load_cfg()
+    yc = str(cfg["stream"].get("youtube_cookies") or "").strip()
+    if yc and not cookies_file(cfg["stream"]):
+        print(f"  !!  cookies        youtube_cookies = {yc!r} not found")
+    elif yc:
+        print(f"  ok  cookies        YouTube cookies file set")
+    for d in (HOME, JOBS, LOGS, LOCKS, DEFAULT_SESSIONS, CONFIG):
+        if d.exists() and not os.access(d, os.W_OK):
+            print(f"  !!  permissions    can't write {d} — run: sudo chown -R $(id -un) {HOME}")
+            ok = False
     print(f"  ok  encoder        {t['encoder']}")
     print(f"  ok  python         {sys.version.split()[0]}  ·  data in {HOME}")
     if not ok:

@@ -10,6 +10,7 @@ blur spikes.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -79,7 +80,8 @@ def video_id(handle_or_url: str) -> str | None:
         return m[1]
     # channel handle → whatever is live on /@handle/live right now
     try:
-        out = subprocess.run(["yt-dlp", "--no-warnings", "--skip-download", "--print", "id",
+        auth = json.loads(os.environ.get("CLIPPER_YTDLP_AUTH") or "[]")  # cookies, set by clipper.py
+        out = subprocess.run(["yt-dlp", *auth, "--no-warnings", "--skip-download", "--print", "id",
                               f"https://www.youtube.com/@{handle_or_url.lstrip('@')}/live"],
                              capture_output=True, text=True, timeout=60)
         vid = out.stdout.strip().splitlines()

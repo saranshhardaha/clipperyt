@@ -105,7 +105,8 @@ def main():
         b = api("/api/jobs", {"kind": "watch", "name": "Beta", "channels": {"youtube": "beta", "twitch": "beta"},
                               "record_from": "youtube"})
         v = api("/api/jobs", {"kind": "url", "url": "https://www.youtube.com/watch?v=VODVIDEO001"})
-        ids = {"a": a["job"]["id"], "b": b["job"]["id"], "v": v["job"]["id"]}
+        l = api("/api/jobs", {"kind": "url", "url": "https://www.youtube.com/watch?v=LIVEVIDEO01"})  # One link, live
+        ids = {"a": a["job"]["id"], "b": b["job"]["id"], "v": v["job"]["id"], "l": l["job"]["id"]}
         print("jobs:", ids, flush=True)
 
         def states():
@@ -131,14 +132,16 @@ def main():
             s = states()
             ok = all(s[ids[k]]["state"]["status"] == "waiting" and (sess_dir(ss) / "clips.md").exists()
                      for k, ss in (("a", sa), ("b", sb)))
-            return ok and s[ids["v"]]["state"]["status"] == "done" and s
-        s = wait(finished, SECONDS + 240, "both streams clipped + vod done")
+            return ok and all(s[ids[k]]["state"]["status"] == "done" for k in "vl") and s
+        s = wait(finished, SECONDS + 300, "both streams clipped + vod done + live link done")
 
         vs = s[ids["v"]]["state"]["session"]
+        ls = s[ids["l"]]["state"]["session"]
         assert vs.endswith("-vodguy-vod"), vs
-        for ss in (sa, sb, vs):
+        assert ls and ls.endswith("-liveguy"), ls
+        for ss in (sa, sb, vs, ls):
             d = sess_dir(ss)
-            assert d.parent.name in ("alpha", "beta", "vodguy"), d  # filed under its channel folder
+            assert d.parent.name in ("alpha", "beta", "vodguy", "liveguy"), d  # filed under its channel folder
             shorts = sorted(d.glob("clips/*/short.mp4"))
             assert shorts, f"no clips in {ss}: " + (d / "clips.md").read_text()
             assert probe(shorts[0]) == "1080,1920", probe(shorts[0])
@@ -146,14 +149,16 @@ def main():
             assert "Credit the streamer" in md and "http" in md, md
             print(f"{ss}: {len(shorts)} clips", flush=True)
 
-        logs = "".join((HOMEDIR / "jobs" / ids[k] / "job.log").read_text() for k in "abv")
+        logs = "".join((HOMEDIR / "jobs" / ids[k] / "job.log").read_text() for k in "abvl")
         assert "waiting for a free clipping slot" in logs, "processing was not serialized"
         print("processing slots: serialized ✓", flush=True)
 
         sess = {x["id"]: x for x in api("/api/sessions")}
         assert sess[sa]["stats"]["chat"] > 100 and sess[sa]["stats"]["spikes"] >= 1, sess[sa]["stats"]
         sysinfo = api("/api/system")
-        assert sysinfo["totals"]["sessions"] == 3, sysinfo["totals"]
+        assert sysinfo["totals"]["sessions"] == 4, sysinfo["totals"]
+        meta = json.loads((sess_dir(ls) / "meta.json").read_text())
+        assert meta["source_url"].endswith("LIVEVIDEO01") and meta["rec_start_ms"] > 0, meta  # live timing, not VOD
 
         for k in "ab":
             api(f"/api/jobs/{ids[k]}/stop", {})
