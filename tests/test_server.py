@@ -134,6 +134,23 @@ class Api(unittest.TestCase):
         self.assertIn("PermissionError", r["error"])
         self.assertIn("chown", r["error"])
 
+    def test_cookie_upload(self):
+        import stat
+        p = self.port
+        self.assertEqual(call(p, "/api/cookies", {"text": "hello"})[0], 400)
+        txt = ("# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tabc\n"
+               ".youtube.com\tTRUE\t/\tTRUE\t0\tPREF\tx\n.google.com\tTRUE\t/\tTRUE\t0\tNID\tn\n")
+        code, r = call(p, "/api/cookies", {"text": txt})
+        self.assertEqual(code, 200, r)
+        self.assertEqual((r["cookies"]["youtube_cookies"], r["cookies"]["logged_in"]), (2, True))
+        f = HOME / "youtube-cookies.txt"
+        self.assertEqual(stat.S_IMODE(f.stat().st_mode), 0o600)
+        cfg = clipper.load_cfg()
+        self.assertEqual(clipper.ytdlp_cookie_args(cfg["stream"]), ["--cookies", str(f.resolve())])
+        self.assertTrue(call(p, "/api/settings")[1]["cookies"]["set"])
+        self.assertFalse(call(p, "/api/cookies/remove", {})[1]["cookies"]["set"])
+        self.assertFalse(f.exists())
+
     def test_files_no_traversal(self):
         self.assertEqual(call(self.port, "/files/../config.toml")[0], 404)
 

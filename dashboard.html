@@ -356,12 +356,26 @@ async function openSession(id,soft){
 async function loadSettings(){
   if(dirty)return;settings=await j('/api/settings');$('raw').value=settings.toml;
   const bySec={};for(const f of settings.schema){const sec=f.key.split('.')[0];(bySec[sec]=bySec[sec]||[]).push(f)}
-  $('settings').innerHTML=Object.entries(bySec).map(([sec,fs])=>`<section class="card"><h2>${esc(settings.sections[sec]||sec)}</h2><div class="form">${fs.map(field).join('')}</div></section>`).join('');
+  $('settings').innerHTML=Object.entries(bySec).map(([sec,fs])=>`<section class="card"><h2>${esc(settings.sections[sec]||sec)}</h2>${sec==='stream'?cookieCard(settings.cookies):''}<div class="form">${fs.map(field).join('')}</div></section>`).join('');
   // pre-fill new-job form defaults (only if empty)
   const v=settings.values;for(const p of['youtube','twitch','kick']){const el=$('w-'+p);if(!el.value&&v['stream.channels.'+p]&&v['stream.channels.'+p]!=='CHANNEL_HANDLE')el.value=v['stream.channels.'+p]}
   if(v['stream.record_from'])$('w-from').value=v['stream.record_from'];
   syncFrom();
 }
+function cookieCard(c){
+  const st=c&&c.set?`<span class="okc">✓ ${c.youtube_cookies} YouTube cookies${c.logged_in?'':' <span class="err">(no login cookie — export while logged in)</span>'}</span> <span class="faint">· updated ${ago(c.modified)==='just now'?'just now':ago(c.modified)+' ago'}</span>`
+    :c&&c.missing?`<span class="err">cookies file not found: ${esc(c.configured)}</span>`:'<span class="mut">none — only needed if YouTube says “confirm you’re not a bot”</span>';
+  return `<div class="tile" style="margin-bottom:14px;padding:12px"><div class="row between"><div><b>YouTube cookies</b><div style="font-size:12px;margin-top:2px">${st}</div></div>
+    <div class="row"><label class="btn sm" style="cursor:pointer">Upload cookies.txt<input type="file" id="ck-file" accept=".txt,text/plain" hidden></label>
+    ${c&&c.set?'<button class="sm bad" id="ck-del">Remove</button>':''}</div></div>
+    <div class="help">Log in to YouTube in a browser (a spare account is best), export cookies with a “cookies.txt” extension, upload the file here. Stored only on this machine (owner-only file). Used by yt-dlp and streamlink.</div></div>`}
+$('settings').addEventListener('change',async e=>{
+  if(e.target.id!=='ck-file'||!e.target.files[0])return;e.stopPropagation();
+  const text=await e.target.files[0].text();const r=await post('/api/cookies',{text});
+  toast(r.result||r.error);if(!r.error){dirty=false;loadSettings()}},true);
+$('settings').addEventListener('click',async e=>{
+  if(e.target.id!=='ck-del'||!confirm('Remove the YouTube cookies file?'))return;
+  const r=await post('/api/cookies/remove');toast(r.result||r.error);dirty=false;loadSettings()});
 function field(f){
   const v=settings.values[f.key],id='k-'+f.key.replace(/\W/g,'_'),wide=f.type==='list'||f.key==='render.format';
   let input;
@@ -371,7 +385,7 @@ function field(f){
   else input=`<input id="${id}" data-k="${f.key}" type="${f.type==='secret'?'password':(f.type==='int'||f.type==='float')?'number':'text'}" ${f.type==='float'?'step="any"':''} ${f.min!=null?`min="${f.min}"`:''} value="${esc(v??'')}" autocomplete="off">`;
   return `<label class="f" for="${id}" style="${wide?'grid-column:1/-1':''}"><span>${esc(f.label)}</span>${input}${f.help?`<div class="help">${esc(f.help)}</div>`:''}</label>`;
 }
-$('settings').oninput=e=>{dirty=true;$('set-msg').textContent='Unsaved changes';$('set-msg').className='';
+$('settings').oninput=e=>{if(e.target.id==='ck-file')return;dirty=true;$('set-msg').textContent='Unsaved changes';$('set-msg').className='';
   if(e.target.type==='checkbox')e.target.nextElementSibling.textContent=e.target.checked?'On':'Off'};
 $('set-save').onclick=async()=>{
   const values={};document.querySelectorAll('#settings [data-k]').forEach(el=>values[el.dataset.k]=el.type==='checkbox'?el.checked:el.value);

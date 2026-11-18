@@ -283,12 +283,62 @@ def delete_session(sid: str, source_only: bool) -> str:
     return "deleted"
 
 
+COOKIE_NAME = "youtube-cookies.txt"
+
+
+def cookie_status() -> dict:
+    s = clipper.load_cfg()["stream"]
+    raw = str(s.get("youtube_cookies") or "").strip()
+    f = clipper.cookies_file(s)
+    if not f:
+        return {"set": False, "configured": raw, "missing": bool(raw)}
+    yt = clipper.streamlink_cookie_args(s)
+    return {"set": True, "path": str(f), "youtube_cookies": len(yt),
+            "logged_in": any(a.split("=", 1)[1].split("=")[0] in ("SID", "__Secure-3PSID", "LOGIN_INFO") for a in yt),
+            "modified": int(f.stat().st_mtime)}
+
+
+def save_cookies(text: str) -> tuple[int, dict]:
+    """Store an uploaded cookies.txt privately and point the config at it."""
+    lines = [l for l in text.splitlines() if l.strip()]
+    yt = [l for l in lines if l.split("\t")[0].replace("#HttpOnly_", "").lstrip(".").endswith("youtube.com")
+          and len(l.split("\t")) == 7]
+    if not yt:
+        return 400, {"error": "that doesn't look like a cookies.txt with youtube.com cookies "
+                              "(Netscape format: 7 tab-separated columns per line)"}
+    dst = HOME / COOKIE_NAME
+    tmp = dst.with_suffix(".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text if text.endswith("\n") else text + "\n")
+    os.chmod(tmp, 0o600)
+    tmp.replace(dst)
+    raw = tomllib.loads(clipper.CONFIG.read_text(encoding="utf-8"))
+    raw.setdefault("stream", {}).setdefault("options", {})["youtube_cookies"] = COOKIE_NAME
+    write_config(settings_schema.dump_toml(raw))
+    clipper.load_cfg()
+    st = cookie_status()
+    msg = f"saved {st.get('youtube_cookies', 0)} YouTube cookies"
+    if not st.get("logged_in"):
+        msg += " — but no login cookie (SID / LOGIN_INFO) found; export while logged in to YouTube"
+    return 200, {"result": msg, "cookies": st}
+
+
+def remove_cookies() -> dict:
+    (HOME / COOKIE_NAME).unlink(missing_ok=True)
+    raw = tomllib.loads(clipper.CONFIG.read_text(encoding="utf-8"))
+    raw.setdefault("stream", {}).setdefault("options", {})["youtube_cookies"] = ""
+    write_config(settings_schema.dump_toml(raw))
+    clipper.load_cfg()
+    return {"result": "cookies removed", "cookies": cookie_status()}
+
+
 def get_settings() -> dict:
     clipper.load_cfg()  # creates config.toml from the example if missing
     text = clipper.CONFIG.read_text(encoding="utf-8")
     raw = tomllib.loads(text)
     return {"schema": settings_schema.SCHEMA, "sections": settings_schema.SECTION_TITLES,
-            "values": settings_schema.flatten(raw), "toml": text}
+            "values": settings_schema.flatten(raw), "toml": text, "cookies": cookie_status()}
 
 
 def write_config(text: str) -> None:
@@ -364,7 +414,7 @@ class H(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def json_body(self) -> dict:
-        n = int(self.headers.get("Content-Length") or 0)
+        n = min(int(self.headers.get("Content-Length") or 0), 5 << 20)  # 5 MB is plenty (cookies.txt)
         try:
             return json.loads(self.rfile.read(n) or b"{}") if n else {}
         except json.JSONDecodeError:
@@ -515,6 +565,11 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/settings":
             code, body = save_settings(data.get("values") or {})
             return self.send(code, body)
+        if path == "/api/cookies":
+            code, body = save_cookies(str(data.get("text") or ""))
+            return self.send(code, body)
+        if path == "/api/cookies/remove":
+            return self.send(200, remove_cookies())
         if path == "/api/config":  # raw TOML (Advanced)
             text = data.get("toml", "")
             try:

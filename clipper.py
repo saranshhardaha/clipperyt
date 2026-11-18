@@ -75,8 +75,8 @@ def load_cfg() -> dict:
 YTDLP_AUTH: list[str] = []
 BOT_CHECK = ("confirm you", "not a bot", "Sign in to confirm")
 BOT_HELP = ("YouTube is asking for a sign-in (\"confirm you're not a bot\") — it does this to some IPs. "
-            "Fix: export cookies.txt from a browser logged in to YouTube (a spare account is best) and set "
-            "Settings → Stream defaults → YouTube cookies file. See README → \"YouTube asks to sign in\".")
+            "Fix: export cookies.txt from a browser logged in to YouTube (a spare account is best) and "
+            "upload it in Settings → Stream defaults → YouTube cookies. See README → \"YouTube asks to sign in\".")
 
 
 def cookies_file(s: dict) -> Path | None:
