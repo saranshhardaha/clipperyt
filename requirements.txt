@@ -1,2 +1,2 @@
-chat-downloader>=0.2.8
+chat-downloader>=0.2.8   # only for past Twitch VOD chat (best effort)
 websockets>=12

@@ -4,7 +4,7 @@ Python 3.12 on macOS (Apple Silicon). Clips a YouTube, Twitch or Kick live strea
 
 - `clipper.py`: CLI with `watch`, `process <session>` and `spikes <session>`. It also handles recording and orchestration.
 - `chat_twitch.py`: logs Twitch chat through anonymous IRC (justinfan).
-- `chat_youtube.py`: logs YouTube chat through `chat-downloader`. `chat_kick.py`: logs Kick chat through Kick's public Pusher websocket, which is unofficial.
+- `chat_youtube.py`: YouTube live chat via the popout innertube endpoint (stdlib only, YouTube send timestamps). Past-stream replay uses yt-dlp `--sub-langs live_chat` (`clipper.youtube_replay`). `chat_kick.py`: logs Kick chat through Kick's public Pusher websocket, which is unofficial.
 - `spikes.py`: pure function `find_moments(chat, rec_start_ms, cfg)`. Has no I/O, so it's easy to test.
 - `render.py`: ffmpeg cut, whisper.cpp captions, an ASS subtitle file (captions + credit), and the 1080x1920 render.
 - `server.py`: dashboard plus JSON API, standard library only. It starts the watcher detached (`start_new_session`) and talks to it only through `state.json` (status, pid) and `.stop`. Stop means SIGINT to the process group; while processing it touches `.stop` instead.

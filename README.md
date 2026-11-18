@@ -108,7 +108,7 @@ When you wake up, open `sessions/<date>/clips.md`. It lists every clip with its 
 - **Kick recording fails:** run `streamlink --plugins` to check for `kick`. If it's missing, set `recorder = "yt-dlp"`.
 - **Kick chat says "couldn't read chatroom id":** Kick's Cloudflare blocked the lookup. Open `https://kick.com/api/v2/channels/<slug>` in a browser, copy `"chatroom":{"id":…}` into `kick_chatroom_id`.
 - **Kick chat connects but stays empty:** Kick may have moved off Pusher. Update `PUSHER_URL` in `chat_kick.py`.
-- **YouTube chat errors:** `.venv/bin/pip install -U chat-downloader yt-dlp`.
+- **YouTube chat errors:** update yt-dlp (`brew upgrade yt-dlp`). Live chat reads YouTube's popout endpoint directly; if YouTube changes it, fix `bootstrap()` in `chat_youtube.py`.
 - **`subtitles`/`ass` filter missing:** your ffmpeg lacks libass. `setup.sh` prints the fix.
 - **Logs:** check `logs/`, plus `recorder.log` and `chat.log` inside each session.
 

@@ -344,6 +344,47 @@ def cmd_run(url: str) -> None:
         cmd_vod(url, plat, name, info)
 
 
+def youtube_replay(url: str, session: Path, out: Path) -> int:
+    """Chat replay via yt-dlp (maintained) → offset-ms TSV. Returns message count."""
+    import chat_youtube
+    base = session / "chatreplay"
+    subprocess.run(["yt-dlp", "--no-warnings", "--skip-download", "--write-subs",
+                    "--sub-langs", "live_chat", "-o", str(base), url])
+    src = next(session.glob("chatreplay*.live_chat.json"), None)
+    if not src:
+        return 0
+    n = 0
+    with open(src, encoding="utf-8") as fin, open(out, "w", encoding="utf-8") as fout:
+        for line in fin:
+            try:
+                rep = json.loads(line).get("replayChatItemAction") or {}
+            except json.JSONDecodeError:
+                continue
+            off = int(rep.get("videoOffsetTimeMsec") or -1)
+            if off < 0:
+                continue
+            for _, author, text in chat_youtube.actions_to_rows(rep.get("actions", [])):
+                fout.write(f"{off}\t{author}\t{text}\n")  # ms since video start
+                n += 1
+    return n
+
+
+def twitch_replay(url: str, out: Path) -> int:
+    """Best effort: Twitch VOD chat via chat-downloader (may break when Twitch changes)."""
+    from chat_downloader import ChatDownloader
+    n = 0
+    with open(out, "w", encoding="utf-8") as f:
+        for m in ChatDownloader().get_chat(url, message_groups=["messages"]):
+            t = m.get("time_in_seconds")
+            if t is None or t < 0:
+                continue
+            author = (m.get("author") or {}).get("name", "?")
+            text = (m.get("message") or "").replace("\t", " ").replace("\n", " ")
+            f.write(f"{int(t * 1000)}\t{author}\t{text}\n")
+            n += 1
+    return n
+
+
 def cmd_vod(url: str, plat: str, name: str, info: dict) -> None:
     """A finished stream: download the video + chat replay, then clip."""
     if plat == "kick":
@@ -360,20 +401,11 @@ def cmd_vod(url: str, plat: str, name: str, info: dict) -> None:
     chat_path = session / f"chat_{plat}.tsv"
     if not chat_path.exists() or chat_path.stat().st_size == 0:
         log("downloading chat replay …")
-        from chat_downloader import ChatDownloader  # replay messages carry time_in_seconds
-        n = 0
-        with open(chat_path, "w", encoding="utf-8") as f:
-            for m in ChatDownloader().get_chat(url, message_groups=["messages", "superchat"]):
-                t = m.get("time_in_seconds")
-                if t is None or t < 0:
-                    continue
-                author = (m.get("author") or {}).get("name", "?")
-                text = (m.get("message") or "").replace("\t", " ").replace("\n", " ")
-                f.write(f"{int(t * 1000)}\t{author}\t{text}\n")  # ms since video start
-                n += 1
-                if n % 5000 == 0:
-                    log(f"  {n} messages …")
+        n = youtube_replay(url, session, chat_path) if plat == "youtube" else twitch_replay(url, chat_path)
         log(f"chat replay: {n} messages")
+        if n == 0:
+            raise SystemExit("no chat replay found (chat disabled, or replay not processed yet — "
+                             "YouTube can take a while after a stream ends)")
 
     if not any((session / f).exists() for f in ("stream.mp4", "stream.mkv")):
         set_state("processing", session=session.name, step="downloading video")
