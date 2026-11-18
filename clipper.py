@@ -397,34 +397,34 @@ def recorder_cmd(s: dict, out: Path) -> list[str]:
     return cmd + [url, s.get("quality", "best")]
 
 
-def adopt_dir(src: Path, dst: Path) -> None:
-    """Move the waiting folder onto the reserved (empty) session folder.
+def claim_session_dir(tmp: Path, channel: str) -> Path:
+    """Rename the waiting folder to a new, unique <recordings>/<channel>/<id> folder.
 
-    Renaming a directory over an existing empty one is fine on local disks, but NAS/ZFS
-    shares and LXC bind mounts (NFS, SMB, idmapped) often refuse it with EACCES. Then move
-    each file instead — still a rename within the same filesystem, so the recorder's open
-    file handle keeps writing to the moved stream.ts."""
-    try:
-        src.rename(dst)
-        return
-    except OSError as e:
-        err = e
-    # NFS may report an error for a rename that actually happened (retried request) —
-    # check what's really on disk instead of trusting the error
-    if not src.exists() and dst.is_dir():
-        return
-    for f in list(src.iterdir()) if src.is_dir() else []:
+    The target never exists beforehand: renaming over an existing (even empty) folder is
+    refused by many NAS/ZFS shares and LXC bind mounts, while a plain rename to a free name
+    works everywhere. The recorder keeps writing through its open file handle."""
+    import errno
+    parent = channel_dir(SESSIONS, channel)
+    parent.mkdir(parents=True, exist_ok=True)
+    base = f"{datetime.now():%Y%m%d-%H%M}-{slug(channel)}"
+    last: OSError | None = None
+    for n in range(1, 1000):
+        name = base if n == 1 else f"{base}-{n}"
+        dst = parent / name
+        if find_session(name) or os.path.lexists(dst):
+            continue
         try:
-            os.rename(f, dst / f.name)
-        except FileNotFoundError:
-            if not (dst / f.name).exists():  # neither here nor there → real problem
-                raise
-    if not (dst / "stream.ts").exists():
-        raise RuntimeError(f"couldn't move recording into {dst}: {err}")
-    try:
-        src.rmdir()
-    except OSError:
-        pass
+            os.rename(tmp, dst)
+            return dst
+        except OSError as e:
+            last = e
+            # NFS can report an error for a rename that went through (retried request)
+            if not os.path.lexists(tmp) and os.path.isdir(dst):
+                return dst
+            if e.errno in (errno.EEXIST, errno.ENOTEMPTY):  # another job took the name just now
+                continue
+            raise
+    raise RuntimeError(f"couldn't pick a session folder name in {parent}: {last}")
 
 
 def youtube_is_live(url: str) -> bool:
@@ -526,8 +526,7 @@ def record_once(cfg: dict, wait_name: str = "_waiting", job: str | None = None) 
 
         # reserve a unique empty folder, then rename onto it (POSIX allows dir → empty dir);
         # streamlink keeps writing through its open file handle
-        session = new_session_dir(chans[rp])
-        adopt_dir(tmp, session)
+        session = claim_session_dir(tmp, chans[rp])
         video = session / "stream.ts"
         meta = {"platform": rp, "channel": chans[rp], "chat_from": chans,
                 "rec_start_ms": rec_start_ms, "started": datetime.now().isoformat(timespec="seconds")}
