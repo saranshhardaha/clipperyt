@@ -97,8 +97,10 @@ class Api(unittest.TestCase):
     def test_job_validation(self):
         p = self.port
         self.assertEqual(call(p, "/api/jobs", {"kind": "watch", "channels": {}, "start": False})[0], 400)
-        self.assertEqual(call(p, "/api/jobs", {"kind": "watch", "channels": {"twitch": "x"},
-                                               "record_from": "youtube", "start": False})[0], 400)
+        code, r = call(p, "/api/jobs", {"kind": "watch", "channels": {"twitch": "x"},
+                                        "record_from": "youtube", "start": False})
+        self.assertEqual((code, r["job"]["record_from"]), (200, "twitch"))  # falls back, no error
+        call(p, f"/api/jobs/{r['job']['id']}/delete", {})
         self.assertEqual(call(p, "/api/jobs", {"kind": "url", "url": "https://example.com/v", "start": False})[0], 400)
         code, r = call(p, "/api/jobs", {"kind": "url", "url": "https://youtu.be/abc", "start": False})
         self.assertEqual(code, 200, r)

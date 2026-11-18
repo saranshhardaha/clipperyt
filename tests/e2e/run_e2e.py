@@ -86,6 +86,11 @@ def wait(pred, timeout, what):
     raise AssertionError(f"timed out waiting for {what}")
 
 
+def sess_dir(sid):
+    hits = list((HOMEDIR / "sessions").glob(f"*/{sid}"))
+    return hits[0] if hits else HOMEDIR / "sessions" / "?" / sid
+
+
 def probe(p):
     out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
                           "stream=width,height", "-of", "csv=p=0", str(p)], capture_output=True, text=True)
@@ -124,7 +129,7 @@ def main():
 
         def finished():
             s = states()
-            ok = all(s[ids[k]]["state"]["status"] == "waiting" and (HOMEDIR / "sessions" / ss / "clips.md").exists()
+            ok = all(s[ids[k]]["state"]["status"] == "waiting" and (sess_dir(ss) / "clips.md").exists()
                      for k, ss in (("a", sa), ("b", sb)))
             return ok and s[ids["v"]]["state"]["status"] == "done" and s
         s = wait(finished, SECONDS + 240, "both streams clipped + vod done")
@@ -132,7 +137,8 @@ def main():
         vs = s[ids["v"]]["state"]["session"]
         assert vs.endswith("-vodguy-vod"), vs
         for ss in (sa, sb, vs):
-            d = HOMEDIR / "sessions" / ss
+            d = sess_dir(ss)
+            assert d.parent.name in ("alpha", "beta", "vodguy"), d  # filed under its channel folder
             shorts = sorted(d.glob("clips/*/short.mp4"))
             assert shorts, f"no clips in {ss}: " + (d / "clips.md").read_text()
             assert probe(shorts[0]) == "1080,1920", probe(shorts[0])

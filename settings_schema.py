@@ -79,13 +79,22 @@ SCHEMA: list[dict] = [
     {"key": "render.credit", "type": "bool", "label": "Burn in streamer credit",
      "help": "Small \"@channel · Platform\" line at the top. Keep it on."},
 
+    # ---- storage
+    {"key": "storage.sessions_dir", "type": "str", "label": "Recordings folder",
+     "help": "Where new recordings + clips go, e.g. /Volumes/BigDrive/clipperyt (Mac) or /mnt/media/clipperyt "
+             "(Linux). Empty = the app's sessions/ folder. The folder above it must already exist, so an unplugged "
+             "drive never silently fills the internal disk. Existing sessions stay put — move them from Sessions."},
+    {"key": "storage.also_scan", "type": "list", "label": "Also list sessions from",
+     "help": "Older recordings folders, still shown in Sessions. Filled in automatically when you change the "
+             "recordings folder; remove one once it's empty."},
+
     # ---- limits
     {"key": "limits.max_parallel_processing", "type": "int", "min": 1, "label": "Clip jobs at once",
      "help": "How many streams can be cut + transcribed + rendered at the same time. 1 is safest for whisper."},
 ]
 
 SECTION_TITLES = {"stream": "Stream defaults", "spikes": "Spike detection", "clip": "Clips",
-                  "captions": "Captions", "render": "Render", "limits": "Limits"}
+                  "captions": "Captions", "render": "Render", "storage": "Storage", "limits": "Limits"}
 BY_KEY = {f["key"]: f for f in SCHEMA}
 LEGACY = {"render.vertical", "render.mode"}  # superseded by render.format
 

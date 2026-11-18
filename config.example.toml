@@ -67,6 +67,14 @@ font_size = 64               # caption size in px on a 1080-wide frame
 font = "auto"               # auto = Kohinoor Devanagari (Mac) / Noto Sans Devanagari (Linux)
 credit = true               # small "@channel on YouTube/Kick" credit burned in at the top
 
+[storage]
+# Where new recordings + clips go. "" = sessions/ next to the app.
+# Another drive: "/Volumes/BigDrive/clipperyt" (Mac) or "/mnt/media/clipperyt" (Linux).
+# The folder above it must exist (so an unplugged drive never fills the internal disk).
+sessions_dir = ""
+# Older recordings folders whose sessions are still listed (filled in when you change sessions_dir)
+also_scan = []
+
 [limits]
 # How many streams can be cut + transcribed + rendered at the same time.
 # Recording is never limited; clipping waits for a free slot. 1 is safest for whisper.

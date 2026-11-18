@@ -42,7 +42,32 @@ Jobs run as separate processes. Restarting the dashboard never cuts a recording,
 
 Protect the dashboard with a token: `CLIPPER_TOKEN=some-long-secret .venv/bin/python server.py`, then open `/?token=some-long-secret` once (a cookie keeps you logged in). `install_service.sh` generates a token for you. Without a token, anyone on the network can control it, so keep it on your LAN or Tailscale and never port-forward it.
 
-`CLIPPER_HOME=/some/disk` keeps the config, sessions and jobs somewhere other than the app folder, for example a bigger disk.
+### Where sessions are stored
+
+Each recording goes in a folder per channel:
+
+```
+<recordings folder>/
+  somegamer/
+    20261119-2300-somegamer/        stream.ts, chat_*.tsv, clips/, clips.md
+    20261120-2310-somegamer/
+  othergamer/
+    20261119-2130-othergamer-vod/
+```
+
+Sessions from before channel folders existed are tagged **UNSORTED**. **Sort into channel folders** (Sessions page) files them, and on the same drive that's instant. The Sessions page can also be filtered by channel.
+
+### Recordings on another drive (Settings → Storage)
+
+Set **Recordings folder** to a folder on the bigger drive, e.g. `/Volumes/BigDrive/clipperyt` (Mac) or `/mnt/media/clipperyt` (Linux). New recordings and their clips are written there directly.
+
+- **Moving old sessions:** sessions already in the old folder stay listed and are marked **OLD FOLDER**. Move them with **Move N to recordings folder** (on the Sessions page), or with **Move to recordings folder** inside a session.
+  - On another drive, files are copied, checked, and only then deleted from the old place. On the same drive the move is instant.
+  - Sessions being recorded or clipped are skipped.
+- **Drive not connected:** jobs never fall back to the internal disk. A watch job shows "is the drive connected?" and retries, and starts recording on the drive as soon as it's back. The System tab shows each drive's free space and flags a missing one.
+- **Linux mount points:** create the folder on the mounted drive once, from Settings or with `mkdir`. When the drive isn't mounted, that folder is missing, so the app knows not to record there.
+
+To move everything (config, jobs and sessions), set `CLIPPER_HOME=/some/disk` instead.
 
 ### Output shape (Settings → Render)
 
@@ -54,6 +79,21 @@ Protect the dashboard with a token: `CLIPPER_TOKEN=some-long-secret .venv/bin/py
 | `9:16-crop` | 1080x1920 | a centre crop that fills the screen but cuts off the sides |
 
 In both 9:16 modes, captions go just under the picture and the credit line goes in the top band.
+
+## Update
+
+```bash
+./update.sh                  # git pull → python packages → reload the dashboard → restart idle jobs
+./update.sh --upgrade-tools  # macOS: also brew upgrade streamlink + yt-dlp (do this when a site stops working)
+./update.sh --keep-jobs      # don't restart waiting jobs
+```
+
+It never interrupts a recording:
+- The dashboard is reloaded through systemd, the LaunchAgent, or a manually started `server.py`.
+- Jobs that are only waiting for a stream are restarted on the new code.
+- Jobs that are recording or clipping keep running. Restart them from the dashboard after the stream.
+
+It stops without changing anything if you have local edits to tracked files.
 
 ## Run: from a terminal
 

@@ -130,7 +130,7 @@ def live_stats(state: dict) -> dict | None:
     sid = state.get("session")
     if state.get("status") != "live" or not sid:
         return None
-    sess = clipper.SESSIONS / sid
+    sess = clipper.find_session(sid) or clipper.SESSIONS / sid
     ts = sess / "stream.ts"
     chats = chat_of(sess)
     rows = [r for t in chats.values() for r in t.rows]
@@ -249,6 +249,21 @@ def tools() -> dict:
 
 def system_stats(sessions: list[dict]) -> dict:
     du = shutil.disk_usage(clipper.HOME)
+    disks, seen = [], set()
+    for label, p in [("recordings", clipper.SESSIONS), ("app data", clipper.HOME),
+                     *[("older sessions", r) for r in clipper.session_roots()[1:]]]:
+        try:
+            dev = os.stat(p).st_dev
+            u = shutil.disk_usage(p)
+        except OSError:
+            if label == "recordings":
+                disks.append({"label": label, "path": str(p), "missing": True})
+            continue
+        if dev in seen:
+            continue
+        seen.add(dev)
+        disks.append({"label": label, "path": str(p), "free_gb": round(u.free / 1e9, 1),
+                      "total_gb": round(u.total / 1e9, 1), "used_pct": round(100 * (u.total - u.free) / u.total, 1)})
     try:
         load = [round(x, 2) for x in os.getloadavg()]
     except OSError:
@@ -256,6 +271,7 @@ def system_stats(sessions: list[dict]) -> dict:
     return {
         "disk": {"free_gb": round(du.free / 1e9, 1), "total_gb": round(du.total / 1e9, 1),
                  "used_pct": round(100 * (du.total - du.free) / du.total, 1)},
+        "disks": disks, "recordings_dir": str(clipper.SESSIONS),
         "load": load, "cpus": os.cpu_count(),
         "platform": f"{platform.system()} {platform.release()} · {platform.machine()}",
         "python": sys.version.split()[0],

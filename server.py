@@ -28,6 +28,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 import clipper
+import mover
 import settings_schema
 import stats
 
@@ -38,7 +39,6 @@ except ModuleNotFoundError:
 
 ROOT = clipper.ROOT
 HOME = clipper.HOME
-SESSIONS = clipper.SESSIONS
 JOBS = clipper.JOBS
 TOKEN = os.environ.get("CLIPPER_TOKEN", "")
 PY = sys.executable
@@ -105,9 +105,9 @@ def create_job(data: dict) -> tuple[dict | None, str | None]:
                  if p in clipper.NAMES and str(c or "").strip()}
         if not chans:
             return None, "add at least one channel"
-        rf = data.get("record_from") or next(iter(chans))
-        if rf not in chans:
-            return None, f"record from {rf}, but no {rf} channel is set"
+        rf = data.get("record_from")
+        if rf not in chans:  # e.g. only Twitch filled in while the dropdown still says YouTube
+            rf = next(iter(chans))
         job.update(channels=chans, record_from=rf)
         name = data.get("name") or chans[rf]
     elif kind == "url":
@@ -122,7 +122,7 @@ def create_job(data: dict) -> tuple[dict | None, str | None]:
         name = data.get("name") or re.sub(r"^https?://(www\.)?", "", url)[:40]
     elif kind == "process":
         sid = data.get("session", "")
-        if not SESSION_RE.match(sid) or not (SESSIONS / sid).is_dir():
+        if not SESSION_RE.match(sid) or not clipper.find_session(sid):
             return None, "no such session"
         job["session"] = sid
         name = data.get("name") or f"re-clip {sid}"
@@ -185,20 +185,38 @@ def tail(path: Path | None, n: int = 80) -> str:
 
 
 def busy_sessions() -> dict[str, str]:
-    """session id → status of the job currently working on it."""
-    out = {}
+    """session id → status of the job (or move) currently working on it."""
+    out = {sid: f"move {st['status']}" for sid, st in mover.MOVES.items() if mover.busy(sid)}
     for j in all_jobs():
-        if j["running"] and j["state"].get("session"):
+        if j["running"] and j["state"].get("session") and j["state"].get("status") != "waiting":
             out[j["state"]["session"]] = j["state"]["status"]
     return out
+
+
+def all_session_dirs() -> list[Path]:
+    """Sessions from every folder (recordings folder wins if an id exists twice), newest first."""
+    seen: dict[str, Path] = {}
+    for r in clipper.session_roots():
+        for d in clipper.iter_sessions(r):
+            if SESSION_RE.match(d.name) and d.name not in seen:
+                seen[d.name] = d
+    return [seen[k] for k in sorted(seen, reverse=True)]
+
+
+def where(d: Path) -> dict:
+    """in_recordings_folder = already at <recordings>/<channel>/<id>; 'unsorted' = flat, from before channel folders."""
+    return {"folder": str(d.parent), "in_recordings_folder": d.parent.parent == clipper.SESSIONS,
+            "unsorted": d.parent == clipper.SESSIONS, "channel_folder": d.parent.name}
+
+
+def needs_move(d: Path) -> bool:
+    return d.parent.parent != clipper.SESSIONS
 
 
 def sessions() -> list[dict]:
     res = []
     busy = busy_sessions()
-    for d in sorted(SESSIONS.glob("*"), reverse=True) if SESSIONS.exists() else []:
-        if not d.is_dir() or not SESSION_RE.match(d.name):
-            continue
+    for d in all_session_dirs():
         try:
             meta = json.loads((d / "meta.json").read_text())
         except Exception:
@@ -207,12 +225,13 @@ def sessions() -> list[dict]:
             "id": d.name, "channel": meta.get("channel", "?"), "platform": meta.get("platform", "?"),
             "title": meta.get("title"), "vod": bool(meta.get("vod")), "started": meta.get("started"),
             "job": meta.get("job"), "busy": busy.get(d.name), "stats": stats.session_stats(d),
+            "move": mover.MOVES.get(d.name), **where(d),
         })
     return res
 
 
 def session_detail(sid: str) -> dict:
-    d = SESSIONS / sid
+    d = clipper.find_session(sid)
     spikes_ = json.loads((d / "spikes.json").read_text()) if (d / "spikes.json").exists() else []
     clips = []
     for n, c in enumerate(sorted(p for p in (d / "clips").glob("*/") if p.is_dir())
@@ -231,7 +250,7 @@ def session_detail(sid: str) -> dict:
     except Exception:
         meta = {}
     return {"id": sid, "meta": meta, "stats": stats.session_stats(d), "clips": clips,
-            "busy": busy_sessions().get(sid),
+            "busy": busy_sessions().get(sid), "move": mover.MOVES.get(sid), **where(d),
             "clips_md": f"/files/{sid}/clips.md" if (d / "clips.md").exists() else None,
             "process_log": tail(d / "process.log", 30)}
 
@@ -240,7 +259,7 @@ def session_spikes(sid: str) -> list[dict]:
     cfg = clipper.load_cfg()
     c = cfg["clip"]
     out = []
-    for m in clipper.session_moments(SESSIONS / sid, cfg):
+    for m in clipper.session_moments(clipper.find_session(sid), cfg):
         start = max(0.0, m.onset - c["stream_delay_seconds"] - c["lead_seconds"])
         out.append({"onset": clipper.spikes.fmt(m.onset), "clip_start": clipper.spikes.fmt(start),
                     "score": m.score, "messages": m.messages, "top": m.top[:3]})
@@ -248,7 +267,7 @@ def session_spikes(sid: str) -> list[dict]:
 
 
 def delete_session(sid: str, source_only: bool) -> str:
-    d = SESSIONS / sid
+    d = clipper.find_session(sid)
     if sid in busy_sessions():
         return "a job is using this session — stop it first"
     if source_only:
@@ -282,12 +301,25 @@ def write_config(text: str) -> None:
 
 def save_settings(values: dict) -> tuple[int, dict]:
     raw = tomllib.loads(clipper.CONFIG.read_text(encoding="utf-8"))
+    old_dir = clipper.resolve_dir(raw.get("storage", {}).get("sessions_dir", ""))
     errors = settings_schema.apply_values(raw, values)
     if errors:
         return 400, {"error": "; ".join(errors)}
+    st = raw.setdefault("storage", {})
+    new_dir = clipper.resolve_dir(st.get("sessions_dir", ""))
+    if new_dir != old_dir:
+        err = clipper.check_dir(new_dir)
+        if err:
+            return 400, {"error": f"Recordings folder: {err}"}
+        # keep listing sessions left in the old folder (until they're moved)
+        scan = [p for p in st.get("also_scan", []) if clipper.resolve_dir(p) != new_dir]
+        if old_dir != clipper.DEFAULT_SESSIONS and str(old_dir) not in scan:
+            scan.append(str(old_dir))
+        st["also_scan"] = scan
     text = settings_schema.dump_toml(raw)
     tomllib.loads(text)  # never write something we can't read back
     write_config(text)
+    clipper.load_cfg()
     stats._sys_cache.clear()
     return 200, {"result": "saved — running jobs pick it up at their next stream / clip run"}
 
@@ -344,7 +376,7 @@ class H(BaseHTTPRequestHandler):
         return False
 
     def session_or_404(self, sid: str) -> bool:
-        if SESSION_RE.match(sid) and (SESSIONS / sid).is_dir():
+        if SESSION_RE.match(sid) and clipper.find_session(sid):
             return True
         self.send(404, {"error": "no such session"})
         return False
@@ -353,6 +385,7 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.authed():
             return self.send(401, "Unauthorized — open /?token=YOUR_TOKEN once", "text/plain")
+        clipper.load_cfg()  # cheap; picks up [storage] changes made by hand
         path = urlparse(self.path).path
         q = parse_qs(urlparse(self.path).query)
         if path == "/":
@@ -392,6 +425,7 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.authed():
             return self.send(401, {"error": "unauthorized"})
+        clipper.load_cfg()
         path = urlparse(self.path).path
         data = self.json_body()
         if path == "/api/jobs":
@@ -426,10 +460,25 @@ class H(BaseHTTPRequestHandler):
                 clipper.save_job(job)
                 return self.send(200, {"result": "autostart " + ("on" if job["autostart"] else "off")})
             return self.send(200, {"result": delete_job(jid)})
-        if m := re.fullmatch(r"/api/sessions/([\w-]+)/(process|delete-source|delete)", path):
+        if path == "/api/sessions/move-all":
+            busy = busy_sessions()
+            todo = [d.name for d in all_session_dirs() if needs_move(d) and d.name not in busy]
+            for sid in todo:
+                mover.enqueue(sid)
+            skipped = sum(1 for d in all_session_dirs() if needs_move(d) and d.name in busy)
+            return self.send(200, {"result": f"moving {len(todo)} session(s)"
+                                             + (f", {skipped} busy — try again later" if skipped else "")})
+        if m := re.fullmatch(r"/api/sessions/([\w-]+)/(process|delete-source|delete|move)", path):
             sid, act = m[1], m[2]
             if not self.session_or_404(sid):
                 return
+            if act == "move":
+                if sid in busy_sessions():
+                    return self.send(400, {"error": "busy — wait for it to finish"})
+                err = clipper.check_dir(clipper.SESSIONS, create=clipper.SESSIONS == clipper.DEFAULT_SESSIONS)
+                if err:
+                    return self.send(400, {"error": err})
+                return self.send(200, {"result": mover.enqueue(sid)})
             if act == "process":
                 if sid in busy_sessions():
                     return self.send(400, {"error": "already being worked on"})
@@ -446,12 +495,15 @@ class H(BaseHTTPRequestHandler):
             except tomllib.TOMLDecodeError as e:
                 return self.send(400, {"error": f"invalid TOML: {e}"})
             write_config(text)
+            clipper.load_cfg()
             return self.send(200, {"result": "saved"})
         self.send(404, {"error": "not found"})
 
     def file(self, rel: str) -> None:
-        p = (SESSIONS / rel).resolve()
-        if not str(p).startswith(str(SESSIONS.resolve()) + os.sep) or not p.is_file():
+        sid, _, rest = rel.partition("/")
+        base = clipper.find_session(sid) if SESSION_RE.match(sid) else None
+        p = (base / rest).resolve() if base else None
+        if not p or not str(p).startswith(str(base.resolve()) + os.sep) or not p.is_file():
             return self.send(404, {"error": "not found"})
         size = p.stat().st_size
         ctype = mimetypes.guess_type(p.name)[0] or ("text/plain" if p.suffix in (".srt", ".md") else
@@ -498,9 +550,10 @@ class H(BaseHTTPRequestHandler):
 def main() -> None:
     host = os.environ.get("CLIPPER_HOST", "0.0.0.0")
     port = int(os.environ.get("CLIPPER_PORT", "8787"))
-    for d in (SESSIONS, JOBS, clipper.LOGS):
-        d.mkdir(parents=True, exist_ok=True)
     clipper.load_cfg()
+    for d in (clipper.DEFAULT_SESSIONS, JOBS, clipper.LOGS):
+        d.mkdir(parents=True, exist_ok=True)
+    mover.cleanup_partial()
     autostart()
     srv = ThreadingHTTPServer((host, port), H)
     srv.daemon_threads = True

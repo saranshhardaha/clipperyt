@@ -34,7 +34,9 @@ import spikes
 
 ROOT = Path(__file__).resolve().parent              # code, models/, bin/
 HOME = Path(os.environ.get("CLIPPER_HOME") or ROOT).resolve()  # data: config, sessions, jobs
-SESSIONS = HOME / "sessions"
+DEFAULT_SESSIONS = HOME / "sessions"
+SESSIONS = DEFAULT_SESSIONS   # where NEW recordings go; load_cfg() applies [storage] sessions_dir
+EXTRA_ROOTS: list[Path] = []  # [storage] also_scan: older folders whose sessions are still listed
 JOBS = HOME / "jobs"
 LOCKS = HOME / "locks"
 LOGS = HOME / "logs"
@@ -57,10 +59,91 @@ def load_cfg() -> dict:
         shutil.copy(ROOT / "config.example.toml", CONFIG)
     with open(CONFIG, "rb") as f:
         cfg = tomllib.load(f)
-    for sec in ("stream", "spikes", "clip", "captions", "render", "limits"):
+    for sec in ("stream", "spikes", "clip", "captions", "render", "limits", "storage"):
         cfg.setdefault(sec, {})
     cfg["stream"].update(cfg["stream"].pop("options", {}))  # flatten [stream.options]
+    global SESSIONS, EXTRA_ROOTS
+    SESSIONS = resolve_dir(cfg["storage"].get("sessions_dir", ""))
+    EXTRA_ROOTS = [resolve_dir(p) for p in cfg["storage"].get("also_scan", []) if str(p).strip()]
     return cfg
+
+
+# ---------------------------------------------------------------- storage (sessions on another drive)
+
+class StorageUnavailable(RuntimeError):
+    pass
+
+
+def resolve_dir(raw: str) -> Path:
+    """'' → <home>/sessions; '~' expanded; relative paths are relative to the data folder."""
+    raw = str(raw or "").strip()
+    if not raw:
+        return DEFAULT_SESSIONS
+    p = Path(os.path.expanduser(raw))
+    return Path(os.path.abspath(p if p.is_absolute() else HOME / p))
+
+
+def check_dir(p: Path, create: bool = True) -> str | None:
+    """None if recordings can be written to `p`, else why not.
+
+    Never create a folder on the wrong disk when a drive isn't mounted: the parent must
+    exist, and with create=False (recording time, custom folder) the folder itself must
+    exist — an unmounted Linux mount point is an empty dir, so its parent always exists."""
+    if p.exists() and not p.is_dir():
+        return f"{p} is a file, not a folder"
+    if not p.exists() and not p.parent.is_dir():
+        return f"{p.parent} doesn't exist — is the drive connected?"
+    if not p.exists() and not create:
+        return f"{p} doesn't exist — is the drive connected?"
+    try:
+        p.mkdir(exist_ok=True)
+        probe = p / f".write-test-{os.getpid()}"
+        probe.write_bytes(b"x")
+        probe.unlink()
+    except OSError as e:
+        return f"can't write to {p}: {e.strerror or e}"
+    return None
+
+
+def session_roots() -> list[Path]:
+    """Every folder that may hold sessions — recordings folder first."""
+    out: list[Path] = []
+    for r in (SESSIONS, DEFAULT_SESSIONS, *EXTRA_ROOTS):
+        if r not in out:
+            out.append(r)
+    return out
+
+
+def find_session(sid: str) -> Path | None:
+    """<root>/<channel>/<sid> (current layout) or <root>/<sid> (sessions from before channel folders)."""
+    if not sid or "/" in sid or sid.startswith((".", "_")):
+        return None
+    for r in session_roots():
+        if (r / sid / "meta.json").is_file():
+            return r / sid
+        for d in r.glob(f"*/{sid}") if r.is_dir() else []:
+            if (d / "meta.json").is_file() and not d.parent.name.startswith((".", "_")):
+                return d
+    return None
+
+
+def iter_sessions(root: Path):
+    """Every session folder under one root: <root>/<channel>/<sid> and legacy flat <root>/<sid>."""
+    if not root.is_dir():
+        return
+    for d in root.iterdir():
+        if not d.is_dir() or d.name.startswith((".", "_")):
+            continue
+        if (d / "meta.json").is_file():
+            yield d                      # legacy flat session
+        else:
+            for s in d.iterdir():        # channel folder
+                if s.is_dir() and not s.name.startswith((".", "_")) and (s / "meta.json").is_file():
+                    yield s
+
+
+def channel_dir(root: Path, channel: str) -> Path:
+    return root / slug(channel)
 
 
 # Legacy CLI runs (`watch`, `run`) use these; `job <id>` points them at jobs/<id>/.
@@ -123,11 +206,16 @@ def slug(s: str) -> str:
 
 
 def new_session_dir(channel: str, suffix: str = "") -> Path:
-    """Reserve a unique, empty sessions/<YYYYMMDD-HHMM>-<channel><suffix>[-N] folder."""
-    SESSIONS.mkdir(parents=True, exist_ok=True)
+    """Reserve a unique, empty <recordings>/<channel>/<YYYYMMDD-HHMM>-<channel><suffix>[-N] folder.
+    The id (folder name) is unique across every root and channel folder."""
+    parent = channel_dir(SESSIONS, channel)
+    parent.mkdir(parents=True, exist_ok=True)
     base = f"{datetime.now():%Y%m%d-%H%M}-{slug(channel)}{suffix}"
     for n in range(1, 1000):
-        d = SESSIONS / (base if n == 1 else f"{base}-{n}")
+        name = base if n == 1 else f"{base}-{n}"
+        if find_session(name):
+            continue
+        d = parent / name
         try:
             d.mkdir()
             return d
@@ -260,6 +348,9 @@ def stop(p: subprocess.Popen | None) -> None:
 def record_once(cfg: dict, wait_name: str = "_waiting", job: str | None = None) -> Path | None:
     """Wait for the stream, record it with chat, return the session folder."""
     s = cfg["stream"]
+    err = check_dir(SESSIONS, create=SESSIONS == DEFAULT_SESSIONS)
+    if err:
+        raise StorageUnavailable(f"recordings folder unavailable: {err}")
     tmp = SESSIONS / wait_name  # one per job, so parallel jobs never share it
     if tmp.exists():
         shutil.rmtree(tmp, ignore_errors=True)
@@ -425,7 +516,7 @@ def cmd_status() -> None:
     st = read_state()
     print(f"status: {st['status']}")
     if st["status"] == "live":
-        sess = SESSIONS / st["session"]
+        sess = find_session(st["session"]) or SESSIONS / st["session"]
         size = (sess / "stream.ts").stat().st_size / 1e9 if (sess / "stream.ts").exists() else 0
         mins = (time.time() * 1000 - st["rec_start_ms"]) / 60000
         print(f"  recording {st['channel']} on {NAMES[st['platform']]} for {mins:.0f} min, {size:.2f} GB")
@@ -433,7 +524,7 @@ def cmd_status() -> None:
             print(f"  {f.name}: {sum(1 for _ in open(f, encoding='utf-8', errors='ignore'))} messages")
     elif st["status"] in ("waiting", "processing"):
         print(f"  {st.get('url') or st.get('session')} (since {datetime.fromtimestamp(st['since']):%H:%M})")
-    done = sorted(SESSIONS.glob("*/clips.md")) if SESSIONS.exists() else []
+    done = sorted(f for r in session_roots() if r.exists() for f in r.glob("*/clips.md"))
     if done:
         print(f"latest clips: {done[-1]}")
 
@@ -521,6 +612,9 @@ def cmd_vod(url: str, plat: str, name: str, info: dict, job: str | None = None) 
     """A finished stream: download the video + chat replay, then clip."""
     if plat == "kick":
         raise SystemExit("Kick doesn't keep chat for past streams — only live works for Kick")
+    err = check_dir(SESSIONS, create=SESSIONS == DEFAULT_SESSIONS)
+    if err:
+        raise StorageUnavailable(f"recordings folder unavailable: {err}")
     session = new_session_dir(name, "-vod")
     meta = {"platform": plat, "channel": name, "chat_from": {plat: name}, "source_url": url,
             "title": info.get("title"), "rec_start_ms": 0, "vod": True,
@@ -557,8 +651,17 @@ def cmd_watch(job: dict | None = None) -> None:
         if job:  # a dashboard job brings its own channels; everything else is global config
             cfg["stream"]["channels"] = job["channels"]
             cfg["stream"]["record_from"] = job.get("record_from") or next(iter(job["channels"]))
-        session = record_once(cfg, f"_waiting-{job['id']}" if job else "_waiting",
-                              job["id"] if job else None)
+        try:
+            session = record_once(cfg, f"_waiting-{job['id']}" if job else "_waiting",
+                                  job["id"] if job else None)
+        except StorageUnavailable as e:  # e.g. external drive unplugged — wait for it to come back
+            log(f"{e} — retrying in {cfg['stream'].get('retry_seconds', 30)}s")
+            set_state("waiting", error=str(e))
+            for _ in range(int(cfg["stream"].get("retry_seconds", 30))):
+                if STOP or STOPFILE.exists():
+                    break
+                time.sleep(1)
+            session = None
         if session:
             try:
                 cmd_process(session)
@@ -591,15 +694,26 @@ def cmd_doctor() -> None:
         raise SystemExit("some required tools are missing (see !! above)")
 
 
+def graceful_signals() -> None:
+    """SIGINT (dashboard Stop) and SIGTERM (systemd/kill) → KeyboardInterrupt → stop recording, clip, exit.
+
+    SIGINT must be re-enabled explicitly: a dashboard started in the background (`&`, nohup,
+    some service managers) passes SIG_IGN down, and Python then never raises KeyboardInterrupt."""
+    def stop(*_):
+        raise KeyboardInterrupt()
+    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGTERM, stop)
+
+
 def cmd_job(jid: str) -> None:
     """Run one dashboard job with its own state/stop files in jobs/<id>/."""
     global STATE, STOPFILE
     job = load_job(jid)
+    load_cfg()  # applies [storage] → SESSIONS
     d = job_dir(jid)
     STATE, STOPFILE = d / "state.json", d / ".stop"
     STOPFILE.unlink(missing_ok=True)
-    # systemd/kill send SIGTERM → treat like Ctrl-C (stop recording, clip, exit)
-    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+    graceful_signals()
     set_state("starting", kind=job["kind"])
     final, extra = "done", {}
     try:
@@ -609,7 +723,9 @@ def cmd_job(jid: str) -> None:
         elif job["kind"] == "url":
             cmd_run(job["url"], f"_waiting-{jid}", jid)
         elif job["kind"] == "process":
-            session = SESSIONS / job["session"]
+            session = find_session(job["session"])
+            if not session:
+                raise SystemExit(f"session {job['session']} not found (drive disconnected?)")
             set_state("processing", session=session.name)
             cmd_process(session)
         else:
@@ -624,7 +740,8 @@ def cmd_job(jid: str) -> None:
         final, extra = "failed", {"error": f"{type(e).__name__}: {e}"}
         log(f"failed: {e!r}")
     set_state(final, kind=job["kind"], **extra)
-    shutil.rmtree(SESSIONS / f"_waiting-{jid}", ignore_errors=True)
+    for r in session_roots():
+        shutil.rmtree(r / f"_waiting-{jid}", ignore_errors=True)
 
 
 def main() -> None:
@@ -640,8 +757,7 @@ def main() -> None:
         return
     if args[0] == "watch":
         STOPFILE.unlink(missing_ok=True)
-        # systemd/kill send SIGTERM → treat like Ctrl-C (stop recording, clip, exit)
-        signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+        graceful_signals()
         try:
             cmd_watch()
         except KeyboardInterrupt:
@@ -651,7 +767,7 @@ def main() -> None:
         cmd_job(args[1])
         return
     if args[0] == "run" and len(args) == 2:
-        signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+        graceful_signals()
         try:
             cmd_run(args[1])
         except KeyboardInterrupt:
@@ -659,7 +775,9 @@ def main() -> None:
         return
     if args[0] in ("process", "spikes") and len(args) == 2:
         session = Path(args[1])
-        session = session if session.is_dir() else SESSIONS / args[1]
+        if not session.is_dir():
+            load_cfg()
+            session = find_session(args[1]) or SESSIONS / args[1]
         (cmd_process if args[0] == "process" else cmd_spikes)(session)
         return
     print(__doc__)

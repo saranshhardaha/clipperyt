@@ -23,6 +23,13 @@ Records a YouTube / Twitch / Kick live stream and its chat with no accounts or A
 - `server.py`: stdlib dashboard and JSON API on :8787 (`CLIPPER_TOKEN`).
   - It starts each job detached (`start_new_session`, plus `caffeinate -is` on macOS), and jobs survive dashboard restarts. Jobs with `autostart` start on boot.
   - Routes: `/api/jobs`, `/api/sessions`, `/api/settings` and `/api/system`.
+- Layout: `<recordings>/<channel-slug>/<session-id>/`, where the id is unique across all folders. Flat `<root>/<id>` sessions from before still work (`iter_sessions`, `find_session`), and the dashboard tags them UNSORTED; a move files them under their channel.
+- Signals: `graceful_signals()` re-enables SIGINT. A dashboard started in the background passes SIG_IGN down, and then "Stop" silently did nothing.
+- `update.sh`: git pull --ff-only, pip, reload the dashboard (systemd / LaunchAgent / manual), restart jobs that are only `waiting`, then `doctor`. `--upgrade-tools` runs brew upgrade on macOS. It's bash 3.2-safe.
+- Storage: `[storage] sessions_dir` is where new recordings go (`clipper.SESSIONS`, applied by `load_cfg()`). `also_scan` lists older folders, auto-filled when the folder changes.
+  - `session_roots()` / `find_session(sid)` search every folder. Always look sessions up by id through them; never use `SESSIONS / sid`.
+  - `check_dir(p, create)`: at record time a custom folder must already exist, so an unmounted drive never gets written to the internal disk. Watch jobs retry on `StorageUnavailable`.
+  - `mover.py` moves sessions in a server thread: rename on the same drive, otherwise copy to `.moving-<id>`, verify sizes, rename, then delete the source.
 - `dashboard.html`: the single-page UI, vanilla JS with no CDN. Tabs: Jobs, Sessions, Settings, System.
 - `settings_schema.py`: `SCHEMA` lists every editable config key with its type, label and help. `dump_toml()` is a TOML writer that keeps unknown keys.
 - `stats.py`: incremental chat readers, live and session stats, and the tool and system checks.
