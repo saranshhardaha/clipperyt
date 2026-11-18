@@ -1,18 +1,38 @@
 # clipperyt — notes for Claude Code
 
-Python 3.12 on macOS (Apple Silicon). Clips a YouTube, Twitch or Kick live stream wherever chat spikes.
+Records a YouTube / Twitch / Kick live stream and its chat with no accounts or API keys, finds chat spikes, and turns each one into a captioned 9:16 Short. The streamer is an Indian GTA streamer, so chat and speech are Hindi/Hinglish plus English. Python 3.12 + stdlib where possible. Runs on macOS (dev Mac) and Linux (Proxmox LXC, NVIDIA GPU optional). Public repo: github.com/saranshhardaha/clipperyt.
 
-- `clipper.py`: CLI with `watch`, `process <session>` and `spikes <session>`. It also handles recording and orchestration.
-- `chat_twitch.py`: logs Twitch chat through anonymous IRC (justinfan).
-- `chat_youtube.py`: YouTube live chat via the popout innertube endpoint (stdlib only, YouTube send timestamps). Past-stream replay uses yt-dlp `--sub-langs live_chat` (`clipper.youtube_replay`). `chat_kick.py`: logs Kick chat through Kick's public Pusher websocket, which is unofficial.
-- `spikes.py`: pure function `find_moments(chat, rec_start_ms, cfg)`. Has no I/O, so it's easy to test.
-- `render.py`: ffmpeg cut, whisper.cpp captions, an ASS subtitle file (captions + credit), and the 1080x1920 render.
-- `server.py`: dashboard plus JSON API, standard library only. It starts the watcher detached (`start_new_session`) and talks to it only through `state.json` (status, pid) and `.stop`. Stop means SIGINT to the process group; while processing it touches `.stop` instead.
-- `setup.sh` (macOS/brew) and `setup_linux.sh` (apt, builds whisper.cpp into bin/). `deploy/` holds the systemd unit.
-- `config.toml`: every tunable setting. Session layout is `sessions/<YYYYmmdd-HHMM>/{stream.ts, chat_<platform>.tsv, meta.json, spikes.json, clips.md, clips/NN_HH-MM-SS/}`.
+## Files
+- `clipper.py`: CLI and orchestration.
+  - `watch`: loop on the channels in config.toml
+  - `run <url>`: one stream. If live, record and clip. If finished, download the video + chat replay, then clip.
+  - `process <session>` / `spikes <session>` / `status`
+- `chat_youtube.py`: live chat via YouTube's chat-popout innertube endpoint (`youtubei/v1/live_chat/get_live_chat`), stdlib only. `actions_to_rows()` is shared with replay parsing.
+- `chat_twitch.py`: anonymous IRC (justinfanNNNNN).
+- `chat_kick.py`: Kick's public Pusher websocket. Unofficial and can break.
+- `spikes.py`: pure `find_moments(chat, rec_start_ms, cfg)` with no I/O.
+- `render.py`: cutting, whisper.cpp captions, ASS subs (captions + credit), and the 1080x1920 render. Encoder `auto` = videotoolbox → nvenc → libx264.
+  - `cut_wallclock()` cuts by wall-clock time through `timeline.tsv` (epoch_ms → file bytes, sampled every 1 s), so gaps from skipped Twitch ads or stalls don't desync clips.
+- `server.py`: stdlib dashboard + JSON API on :8787 (`CLIPPER_TOKEN`). Starts the watcher detached and talks to it only through `state.json` and `.stop`.
+- `config.example.toml` is tracked. `config.toml` is gitignored (it may hold `twitch_oauth_token`) and is auto-created from the example.
+- `setup.sh` (brew), `setup_linux.sh` (apt, builds whisper.cpp into bin/), `deploy/` (systemd).
 
-Rules:
-- Each platform writes its own `chat_<platform>.tsv`, and spikes merge every `chat*.tsv`. Lines are `epoch_ms<TAB>author<TAB>text`, stamped with the **local receive time**. meta.json `rec_start_ms` uses the same clock, so don't switch to server timestamps.
-- Don't call any LLM at runtime. The overnight job has to run offline and free.
-- Test spike logic offline: write a synthetic chat.tsv and meta.json, then run `clipper.py spikes`.
-- Credit the streamer: the burned-in credit line and `clips.md` must stay.
+## Timing rules (don't break)
+- Live sessions: `meta.rec_start_ms` = the moment the first video bytes hit disk, by local clock.
+  - Chat lines are `epoch_ms<TAB>author<TAB>text`, with real epoch times. YouTube uses YouTube's `timestampUsec`; Twitch and Kick use local receive time.
+  - Clip start = spike onset − `stream_delay_seconds` − `lead_seconds`.
+- Past-stream (`-vod`) sessions: `rec_start_ms = 0`, and chat "epoch_ms" holds **ms offset from video start**. No timeline.tsv, so cuts use plain `-ss`.
+- Each platform writes `chat_<platform>.tsv`, and spikes merge every `chat*.tsv` (simulcast).
+
+## Conventions
+- Don't call any LLM at runtime. Overnight runs must be free and offline-capable.
+- Keep the streamer credit (burned-in line + clips.md links).
+- Test offline with fakes: a synthetic `stream.ts` (ffmpeg testsrc2), synthetic chat TSV + meta.json, and a fake `streamlink`/`yt-dlp` on PATH. YouTube can't be reached from the sandbox that wrote this.
+
+## Status (2026-11-19)
+- Built and tested with fakes: recording, Twitch/YouTube/Kick chat, spikes, wall-clock cutting, captions/ASS, vertical render, dashboard, `run <url>`, YouTube replay via yt-dlp.
+- **Not yet verified on real streams.** The first real run (`run https://www.youtube.com/watch?v=VZqAPdUvqnQ`, sessions 20261119-0112 / -0115) hit `chat-downloader` "Unable to parse initial video data". That's fixed in commit 2bb2777 by the stdlib YouTube chat reader, which still needs a real-stream check.
+- Next steps the user discussed:
+  1. **Clip-request trigger:** a moment fires when ≥3 *distinct* users say a clip phrase ("clip", "clip it", "clip that", "clipped", "clip karo", "!clip") within 20 s, even without a volume spike. Count each user once, boost the score, and mark it in clips.md. Configurable. Proposed but not built yet.
+  2. Tune `multiplier` / `stream_delay_seconds` after real runs.
+- Twitch VOD chat still uses `chat-downloader` (best effort, may be broken too).
