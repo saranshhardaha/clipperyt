@@ -35,7 +35,9 @@ Records a YouTube / Twitch / Kick live stream and its chat with no accounts or A
   - `session_roots()` / `find_session(sid)` search every folder. Always look sessions up by id through them; never use `SESSIONS / sid`.
   - `check_dir(p, create)`: at record time a custom folder must already exist, so an unmounted drive never gets written to the internal disk. Watch jobs retry on `StorageUnavailable`.
   - `mover.py` moves sessions in a server thread: rename on the same drive, otherwise copy to `.moving-<id>`, verify sizes, rename, then delete the source.
-- `dashboard.html`: the single-page UI, vanilla JS with no CDN. Tabs: Jobs, Sessions, Settings, System.
+- `dashboard.html`: the single-page UI, vanilla JS with no CDN and system fonts only (it must work offline on the LAN). Tabs: Jobs, Clips, Sessions, Settings, System.
+  - Design is a control room. Status colours carry meaning: tally red = on air (only for recording), standby amber = waiting/queued, cue teal = clipping and clip requests. Primary buttons are neutral, there are no ALL-CAPS tags, and status is shown as a dot plus words (`SAY` map).
+  - Jobs never move: fixed sections by type (Watching channels / One links / Fix and re-clip / Terminal runs), A–Z by name. The status chips only count and filter (saved in localStorage). Each job card has a tally strip by status, and a live mono timecode that ticks every second.
 - `settings_schema.py`: `SCHEMA` lists every editable config key with its type, label and help. `dump_toml()` is a TOML writer that keeps unknown keys.
 - `stats.py`: incremental chat readers, live and session stats, and the tool and system checks.
 - `config.example.toml` is tracked. `config.toml` is gitignored (it may hold `twitch_oauth_token`) and is auto-created from the example. `[stream]` holds only the defaults; dashboard jobs carry their own channels, and everything else is global (one config for all jobs, as the user chose).
