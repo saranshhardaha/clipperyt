@@ -4,7 +4,7 @@ import json
 import threading
 import time
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from tests._home import HOME
@@ -102,6 +102,22 @@ class Slots(unittest.TestCase):
         late = datetime(2026, 11, 20, 16, 40, tzinfo=timezone.utc)  # 22:10 IST: today's window is over
         self.assertEqual(youtube.next_slot(CFG, [], late), "2026-11-21T04:30:00Z")
         self.assertEqual(youtube.local_label(CFG, first), "Fri 20 Nov, 10:00")
+        # posts already made today count toward the daily cap
+        self.assertEqual(youtube.next_slot(CFG, [], now, posted=["2026-11-20T02:00:00Z", "2026-11-20T02:30:00Z"]),
+                         "2026-11-21T04:30:00Z")
+        self.assertEqual(youtube.local_day(CFG, first, now), "Today")
+        self.assertEqual(youtube.local_day(CFG, third, now), "Tomorrow")
+
+
+class OldConfig(unittest.TestCase):
+    def test_missing_youtube_section_shows_defaults(self):
+        import settings_schema
+        v = settings_schema.flatten({"stream": {}})          # config.toml made before [youtube] existed
+        self.assertEqual(v["youtube.slots_per_day"], 4)
+        self.assertEqual(v["youtube.window_start"], "10:00")
+        self.assertEqual(v["youtube.client_id"], "")
+        # and that form saves as-is
+        settings_schema.apply_values({"stream": {}}, {k: v[k] for k in v if k.startswith("youtube.")})
 
 
 class Posting(unittest.TestCase):
@@ -118,7 +134,7 @@ class Posting(unittest.TestCase):
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
         cls.s = HOME / "sessions" / "speedy" / "20990110-0000-speedy"
         cls.clips = []
-        for n in ("01_00-01-00", "02_00-05-00"):
+        for n in ("01_00-01-00", "02_00-05-00", "03_00-09-00"):
             c = cls.s / "clips" / n
             c.mkdir(parents=True)
             (c / "short.mp4").write_bytes(bytes(range(256)) * 10)   # 2560 bytes → 3 chunks
@@ -133,6 +149,7 @@ class Posting(unittest.TestCase):
         cls.srv.shutdown()
         cls.g.shutdown()
         youtube.forget(HOME)
+        server.queue_path().unlink(missing_ok=True)
 
     def wait(self, key, timeout=10):
         end = time.time() + timeout
@@ -163,6 +180,16 @@ class Posting(unittest.TestCase):
         self.assertIsNone(st["pending"])
         self.assertEqual(youtube.token_path(HOME).stat().st_mode & 0o777, 0o600)
 
+        # Switch channel: a new code while the old channel stays connected; Cancel keeps the old one
+        code, r = call(self.port, "/api/youtube/connect", {})
+        self.assertEqual(code, 200, r)
+        self.assertTrue(r["connected"])
+        self.assertEqual(r["pending"]["user_code"], "ABCD-EFGH")
+        call(self.port, "/api/youtube/connect/cancel", {})
+        st = call(self.port, "/api/youtube")[1]
+        self.assertIsNone(st["pending"])
+        self.assertTrue(st["connected"])
+
         # Post now: chunked upload (308s) with the AI title, public, Gaming
         code, r = call(self.port, f"/api/sessions/{sid}/clips/01_00-01-00/post", {"title": "My own title"})
         self.assertEqual(code, 200, r)
@@ -179,26 +206,58 @@ class Posting(unittest.TestCase):
         # can't post the same clip twice
         self.assertEqual(call(self.port, f"/api/sessions/{sid}/clips/01_00-01-00/post", {})[0], 400)
 
-        # Schedule: private + publishAt at the next free slot, listed as scheduled
+        # Schedule: the clip goes on the list with the next free time; nothing is uploaded yet
         slot = call(self.port, "/api/youtube")[1]["next_slot"]["iso"]
-        code, r = call(self.port, f"/api/sessions/{sid}/clips/02_00-05-00/schedule", {})
+        code, r = call(self.port, f"/api/sessions/{sid}/clips/02_00-05-00/schedule", {"title": "Queued title"})
         self.assertEqual(code, 200, r)
-        self.assertEqual(r["publish_at"], slot)
-        self.assertEqual(self.wait(f"{sid}/02_00-05-00")["status"], "done")
-        self.assertEqual(G["meta"][1]["status"]["privacyStatus"], "private")
-        self.assertEqual(G["meta"][1]["status"]["publishAt"], slot)
-        self.assertEqual(G["meta"][1]["snippet"]["title"], "Bhai ne police ko chakma de diya")  # AI title used
-        st = call(self.port, "/api/youtube")[1]
-        self.assertEqual([x["name"] for x in st["scheduled"]], ["02_00-05-00"])
-        self.assertNotEqual(st["next_slot"]["iso"], slot)                # that slot is taken now
+        self.assertEqual(r["at"], slot)
+        self.assertEqual(review.get(self.clips[1])["state"], "kept")
+        self.assertEqual(call(self.port, f"/api/sessions/{sid}/clips/03_00-09-00/schedule", {})[0], 200)
+        q = call(self.port, "/api/youtube")[1]["queue"]
+        self.assertEqual([i["name"] for i in q], ["02_00-05-00", "03_00-09-00"])
+        self.assertGreater(q[1]["at"], q[0]["at"])
+        self.assertEqual(q[0]["title"], "Queued title")
+        self.assertEqual(len(G["uploads"]), 1)                                  # only the Post now one
+        self.assertEqual(call(self.port, f"/api/sessions/{sid}/clips/02_00-05-00/schedule", {})[0], 400)
 
-        # Unschedule: the video is deleted on YouTube, the clip is back in Kept
-        code, r = call(self.port, f"/api/sessions/{sid}/clips/02_00-05-00/unschedule", {})
+        # reorder swaps the times
+        call(self.port, "/api/youtube/queue", {"action": "move", "key": f"{sid}/03_00-09-00", "dir": -1})
+        q2 = call(self.port, "/api/youtube")[1]["queue"]
+        self.assertEqual([i["name"] for i in q2], ["03_00-09-00", "02_00-05-00"])
+        self.assertEqual([i["at"] for i in q2], [q[0]["at"], q[1]["at"]])
+        call(self.port, "/api/youtube/queue", {"action": "move", "key": f"{sid}/03_00-09-00", "dir": 1})
+
+        # paused: nothing goes up even when the time has come
+        far = datetime.fromisoformat(q[1]["at"].replace("Z", "+00:00")) + timedelta(hours=1)
+        call(self.port, "/api/youtube/queue", {"action": "pause", "paused": True})
+        server.yt_tick(far)
+        self.assertEqual(len(G["uploads"]), 1)
+        call(self.port, "/api/youtube/queue", {"action": "pause", "paused": False})
+
+        # both times passed (machine was off): the first goes up, the other gets a new later time
+        server.yt_tick(far)
+        self.assertEqual(self.wait(f"{sid}/02_00-05-00")["status"], "done")
+        self.assertEqual(G["meta"][1]["snippet"]["title"], "Queued title")
+        self.assertEqual(G["meta"][1]["status"]["privacyStatus"], "public")
+        st = call(self.port, "/api/youtube")[1]
+        self.assertEqual([i["name"] for i in st["queue"]], ["03_00-09-00"])
+        self.assertGreater(st["queue"][0]["at"], far.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        self.assertEqual(st["history"][0]["key"], f"{sid}/02_00-05-00")
+        self.assertEqual(review.get(self.clips[1])["state"], "posted")
+
+        # Unschedule a listed clip: it just leaves the list
+        code, r = call(self.port, f"/api/sessions/{sid}/clips/03_00-09-00/unschedule", {})
         self.assertEqual(code, 200, r)
-        self.assertEqual(G["deleted"], ["vid-s2"])
-        rv = review.get(self.clips[1])
-        self.assertEqual(rv["state"], "kept")
-        self.assertNotIn("video_id", rv)
+        self.assertEqual(call(self.port, "/api/youtube")[1]["queue"], [])
+        self.assertEqual(G["deleted"], [])
+
+        # a clip uploaded with a publish time: Unschedule deletes it on YouTube
+        review.put(self.clips[2], "posted", url="u", video_id="vid-old", publish_at="2999-01-01T00:00:00Z")
+        self.assertEqual([x["name"] for x in call(self.port, "/api/youtube")[1]["scheduled"]], ["03_00-09-00"])
+        code, r = call(self.port, f"/api/sessions/{sid}/clips/03_00-09-00/unschedule", {})
+        self.assertEqual(code, 200, r)
+        self.assertEqual(G["deleted"], ["vid-old"])
+        self.assertEqual(review.get(self.clips[2])["state"], "kept")
         self.assertEqual(call(self.port, "/api/youtube")[1]["scheduled"], [])
 
         # an expired access token is refreshed with the refresh token

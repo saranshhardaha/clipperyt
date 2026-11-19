@@ -230,9 +230,10 @@ def _hm(s: str, default: tuple[int, int]) -> tuple[int, int]:
         return default
 
 
-def next_slot(cfg: dict, taken: list[str], now: datetime | None = None) -> str:
+def next_slot(cfg: dict, taken: list[str], now: datetime | None = None, posted: list[str] = ()) -> str:
     """Next free publish time (UTC ISO 'Z'): inside the daily window, slot_gap_hours apart,
-    at most slots_per_day per local day, at least 15 minutes from now."""
+    at most slots_per_day per local day (counting `posted`, the times of posts already made),
+    at least 15 minutes from now."""
     tz = _tz(cfg)
     now = (now or datetime.now(timezone.utc)).astimezone(tz)
     gap = timedelta(hours=max(0.25, float(cfg.get("slot_gap_hours", 3))))
@@ -244,12 +245,18 @@ def next_slot(cfg: dict, taken: list[str], now: datetime | None = None) -> str:
             busy.append(datetime.fromisoformat(t.replace("Z", "+00:00")).astimezone(tz))
         except ValueError:
             pass
+    done = []
+    for t in posted:
+        try:
+            done.append(datetime.fromisoformat(t.replace("Z", "+00:00")).astimezone(tz))
+        except ValueError:
+            pass
     earliest = now + timedelta(minutes=15)
     for day in range(0, 120):
         d = (now + timedelta(days=day)).date()
         start = datetime(d.year, d.month, d.day, h0, m0, tzinfo=tz)
         end = datetime(d.year, d.month, d.day, h1, m1, tzinfo=tz)
-        if sum(1 for b in busy if b.date() == d) >= per_day:
+        if sum(1 for b in busy + done if b.date() == d) >= per_day:
             continue
         t = start
         while t <= end:
@@ -262,3 +269,19 @@ def next_slot(cfg: dict, taken: list[str], now: datetime | None = None) -> str:
 def local_label(cfg: dict, iso: str) -> str:
     t = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(_tz(cfg))
     return t.strftime("%a %d %b, %H:%M")
+
+
+def local_day(cfg: dict, iso: str, now: datetime | None = None) -> str:
+    """'Today' / 'Tomorrow' / 'Sat 22 Nov' in the posting time zone."""
+    tz = _tz(cfg)
+    d = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(tz).date()
+    today = (now or datetime.now(timezone.utc)).astimezone(tz).date()
+    if d == today:
+        return "Today"
+    if d == today + timedelta(days=1):
+        return "Tomorrow"
+    return d.strftime("%a %d %b")
+
+
+def local_time(cfg: dict, iso: str) -> str:
+    return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(_tz(cfg)).strftime("%H:%M")

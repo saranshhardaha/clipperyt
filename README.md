@@ -174,9 +174,10 @@ Captions are timed to the words, not to whisper's long blocks, which used to sta
 
 Clips can go straight to your channel as Shorts. Nothing is posted unless you press a button.
 - **Post now** uploads the clip with the title you picked (or the first AI suggestion), the description and #Shorts.
-- **Schedule for …** uploads it right away as private and YouTube makes it public at the next free slot. Slots come from **Settings → YouTube**: daily window (default 10:00–22:00), hours between posts and posts per day, in your time zone. Your machine can be off when it goes public.
-- **Unschedule** deletes the private video from YouTube and puts the clip back in Kept. Scheduled clips are listed in Settings → YouTube.
-- A failed upload shows in Needs attention.
+- **Schedule for …** puts the clip on the **Scheduled** tab with the next free time. Times come from **Settings → YouTube**: daily window (default 10:00–22:00), hours between posts and posts per day, in your time zone. Posts made today count toward the day's limit.
+- The **Scheduled** tab lists the clips by day and time. You can edit each title, move a clip earlier or later (it swaps times with its neighbour), **Post now**, **Remove**, or **Pause posting** for all of them.
+- When a clip's time comes, the dashboard uploads it (so the machine running it has to be on). If times were missed while it was off, the first clip goes up and the rest move to the next free times, so they don't all post at once.
+- A failed post stays on the list with **Retry now** and shows in Needs attention. Posted clips are listed under **Posted** with a link.
 
 One-time setup (about 10 minutes, steps also shown in Settings → YouTube):
 1. In console.cloud.google.com create a project and enable **YouTube Data API v3**.

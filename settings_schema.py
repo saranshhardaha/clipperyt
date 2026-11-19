@@ -207,6 +207,12 @@ def set_path(d: dict, key: str, value) -> None:
 def flatten(cfg: dict) -> dict:
     """Schema key → current value (raw TOML structure, not the flattened runtime cfg)."""
     out = {f["key"]: get_path(cfg, f["key"]) for f in SCHEMA}
+    # a config.toml from before a section existed (e.g. [youtube]) shows the shipped defaults,
+    # so the form can be saved without filling in every new field by hand
+    defs = defaults()
+    for f in SCHEMA:
+        if out[f["key"]] is None and not f.get("optional") and f["key"] != "render.format":
+            out[f["key"]] = defs.get(f["key"])
     if out.get("render.format") is None:  # show what the old keys mean
         import render
         out["render.format"] = render.out_format(cfg.get("render", {}))
