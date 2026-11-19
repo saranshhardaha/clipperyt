@@ -290,6 +290,7 @@ def sessions() -> list[dict]:
 def session_detail(sid: str) -> dict:
     d = clipper.find_session(sid)
     spikes_ = json.loads((d / "spikes.json").read_text()) if (d / "spikes.json").exists() else []
+    locked = clipper.locked_clips(d)
     clips = []
     for n, c in enumerate(sorted(p for p in (d / "clips").glob("*/") if p.is_dir())
                           if (d / "clips").exists() else []):
@@ -307,7 +308,7 @@ def session_detail(sid: str) -> dict:
             "srt": f"/files/{sid}/clips/{c.name}/speech.srt" if (c / "speech.srt").exists() else None,
             "score": m.get("score"), "messages": m.get("messages"), "top": m.get("top", []),
             "requests": m.get("requests", 0), "kind": m.get("kind", "spike"), "failed": not final,
-            "review": review.get(c),
+            "review": review.get(c), "locked": locked.get(c.name),
             "titles": titles.cached(c),
         })
     try:
@@ -663,6 +664,11 @@ def queue_action(data: dict) -> tuple[int, dict]:
             q["paused"] = bool(data.get("paused"))
             save_queue(q)
             return 200, {"result": "Posting paused" if q["paused"] else "Posting resumed"}
+        if act == "reslot":
+            try:
+                return 200, {"result": reslot(q)}
+            except youtube.YouTubeError as e:
+                return 400, {"error": str(e)}
         it = next((i for i in q["items"] if i["key"] == key), None)
         if not it:
             return 404, {"error": "that clip isn't in the schedule"}
@@ -701,6 +707,29 @@ def queue_action(data: dict) -> tuple[int, dict]:
             save_queue(q)
             return 200, {"result": "ok"}
         return 400, {"error": f"unknown action {act!r}"}
+
+
+def reslot(q: dict, now=None) -> str:
+    """Give every waiting clip a new time from the current [youtube] settings, keeping their
+    order. Clips uploading, failed or already on YouTube (private until publishAt) keep theirs."""
+    waiting = sorted((i for i in q["items"] if i["status"] == "waiting"), key=lambda i: i["at"])
+    if not waiting:
+        return "Nothing to reschedule"
+    cfg = yt_cfg()
+    taken = [x["publish_at"] for x in scheduled_clips()] + [i["at"] for i in q["items"]
+                                                            if i["status"] == "uploading"]
+    posted = [h["posted_at"] for h in q["history"]]
+    new = []
+    for i in waiting:  # all or nothing: a clip that finds no slot leaves the list untouched
+        at = youtube.next_slot(cfg, taken, now, posted=posted)
+        taken.append(at)
+        new.append(at)
+    moved = sum(1 for i, at in zip(waiting, new) if i["at"] != at)
+    for i, at in zip(waiting, new):
+        i["at"] = at
+    save_queue(q)
+    return (f"Rescheduled {moved} clip{'s' if moved != 1 else ''}; the first now posts "
+            f"{youtube.local_label(cfg, new[0])}") if moved else "Times already match the settings"
 
 
 def yt_tick(now=None) -> None:
@@ -847,6 +876,9 @@ def delete_session(sid: str, source_only: bool) -> str:
     d = clipper.find_session(sid)
     if sid in busy_sessions():
         return "a job is using this session — stop it first"
+    sched = [n for n, why in clipper.locked_clips(d).items() if why == "scheduled"]
+    if not source_only and sched:
+        return f"{len(sched)} clip(s) in this session are scheduled to post — unschedule them first (or delete only the recording)"
     if source_only:
         freed = 0
         for f in ("stream.ts", "stream.mp4", "stream.mkv"):
@@ -1214,6 +1246,8 @@ class H(BaseHTTPRequestHandler):
                 return
             if sid in busy_sessions():
                 return self.send(400, {"error": "a job is using this session — wait for it to finish"})
+            if clipper.locked_clips(clipper.find_session(sid)).get(name) == "scheduled":
+                return self.send(400, {"error": "This clip is scheduled to post. Unschedule it first."})
             try:
                 tid = clipper.delete_clip(clipper.find_session(sid), name)
             except ValueError as e:

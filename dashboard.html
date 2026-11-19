@@ -676,7 +676,7 @@ async function openSession(id,soft){
     <div class="row between" style="align-items:flex-start;gap:12px"><div><h2 style="margin:0 0 2px">${esc(m.channel||id)}</h2><div class="mut" style="font-size:13px">${esc(id)}</div></div>${d.busy?busyPill(d.busy,d.move):''}</div>
     <div class="row" style="margin-top:14px">
       ${s.failed?`<button class="sm pri" id="fixall" ${d.busy||!s.has_source?'disabled':''}>Fix ${s.failed} failed clip${s.failed>1?'s':''}</button>`:''}
-      <button class="sm" id="reclip" ${d.busy||!s.has_source?'disabled':''} title="Cut, caption and render every clip again with the current settings; clips at the same time are overwritten">Re-make clips</button>
+      <button class="sm" id="reclip" ${d.busy||!s.has_source?'disabled':''} title="Cut, caption and render every clip again with the current settings; clips at the same time are overwritten, except posted and scheduled ones, which are kept as they are">Re-make clips</button>
       <button class="sm" id="reqclip" ${d.busy||!s.has_source?'disabled':''} title="Cut clips for moments where 3+ chatters asked for a clip, that don't have a clip yet. Existing clips stay.">Add clip-request clips</button>
       <details class="more" style="margin-left:auto"><summary class="btn sm">More</summary><div class="menu">
         <button id="spk">List moments</button>
@@ -691,7 +691,7 @@ async function openSession(id,soft){
       <div class="tile"><b>${num(s.chatters)}</b><span>chatters</span></div><div class="tile"><b>${s.spikes}</b><span>spikes</span></div>
       <div class="tile"><b>${s.clips}</b><span>clips${s.failed?`, ${s.failed} failed`:''}</span></div><div class="tile"><b>${s.gb} GB</b><span>${s.has_source?'with recording':'recording deleted'}</span></div></div>
     <div id="spikes"></div>${d.process_log&&d.busy?`<pre>${esc(d.process_log)}</pre>`:''}</div>`;
-  const sig=JSON.stringify(d.clips.map(c=>[c.video,(c.review||{}).state]));
+  const sig=JSON.stringify(d.clips.map(c=>[c.video,(c.review||{}).state,c.locked,!!ytQ(id+"/"+c.name)]));
   const keepClips=soft&&sig===clipSig&&$('clips');const old=keepClips?$('clips'):null;
   const spikesHtml=soft&&$('spikes')?$('spikes').innerHTML:'';
   const oldTl=soft&&tlFor===id?$('tl-card'):null;
@@ -701,7 +701,7 @@ async function openSession(id,soft){
   $('spikes').innerHTML=spikesHtml;
   if(old){$('clips-slot').replaceWith(old)}else{
     clipSig=sig;rememberTitles(d.clips,id);const c=document.createElement('div');c.className='clips';c.id='clips';
-    c.innerHTML=d.clips.map(c=>`<div class="clip" data-clip="${esc(c.name)}">
+    c.innerHTML=d.clips.map(c=>{const lk=ytQ(id+'/'+c.name)?'scheduled':c.locked||((c.review||{}).state==='posted'?'posted':null);return `<div class="clip" data-clip="${esc(c.name)}">
       ${c.video?`<video src="${c.video}" controls preload="metadata" playsinline style="aspect-ratio:${c.vertical?'9/16':'16/9'}"></video>`:'<div class="failbox">This clip failed.<br>Press Fix to make it again. The job log has the reason.</div>'}
       <div class="row between"><span class="ch">${esc(clipTime(c.name))}</span>${c.requests?`<span class="flag req">Clip request ×${c.requests}</span>`:''}</div>
       <div class="meta">${c.score!=null?`Score ${c.score}`:''}${c.messages?`, ${c.messages} messages`:''}${c.video&&(c.review&&c.review.state!=='new'||ytQ(id+'/'+c.name))?` <span class="state ${(c.review||{}).state}">${ytWord(c.review,id+'/'+c.name)}</span>`:''}</div>
@@ -711,10 +711,11 @@ async function openSession(id,soft){
       ${c.video?`<button class="sm" data-ttl="${esc(id)}/${esc(c.name)}" title="Suggest YouTube Shorts titles with AI">Titles</button>`:''}
       ${c.video?ytBtns(id+'/'+c.name,c.review):''}
       ${c.video&&!(c.review&&c.review.state==='posted')?`<button class="sm" data-posted="${esc(c.name)}">Mark posted</button>`:''}
-      <button class="sm ${c.failed?'pri':''}" data-redo="${esc(c.name)}" ${d.busy||!s.has_source?'disabled':''} title="Cut, caption and render this clip again">${c.failed?'Fix':'Redo'}</button>
-      <button class="sm quiet bad del" data-del="${esc(c.name)}" ${d.busy?'disabled':''}>Delete</button></div>
+      ${lk?`<span class="faint" style="font-size:12.5px" title="Re-make and Redo leave this clip as it is">${lk==='scheduled'?'Scheduled':'Posted'}: kept on re-make</span>`
+        :`<button class="sm ${c.failed?'pri':''}" data-redo="${esc(c.name)}" ${d.busy||!s.has_source?'disabled':''} title="Cut, caption and render this clip again">${c.failed?'Fix':'Redo'}</button>`}
+      ${lk==='scheduled'?'':`<button class="sm quiet bad del" data-del="${esc(c.name)}" ${d.busy?'disabled':''}>Delete</button>`}</div>
       <div data-ytp="${esc(id)}/${esc(c.name)}">${ytProg(id+'/'+c.name)}</div>
-      <div class="ttl" data-panel="${esc(id)}/${esc(c.name)}" hidden></div></div>`).join('')||'<div class="mut">No clips yet. Re-make clips, or tune Spike detection in Settings first.</div>';
+      <div class="ttl" data-panel="${esc(id)}/${esc(c.name)}" hidden></div></div>`}).join('')||'<div class="mut">No clips yet. Re-make clips, or tune Spike detection in Settings first.</div>';
     $('clips-slot').replaceWith(c);
   }
   $('back').onclick=()=>{curSession=null;history.replaceState(null,'','#sessions');loadSessions()};
@@ -962,7 +963,7 @@ function ytCard(){
   else if(y.connected)body=`<div class="row between"><div><b>YouTube</b><div style="font-size:13px;margin-top:2px"><span class="okc">✓ Posting to ${esc(y.channel||'your channel')}</span></div></div>
       <div class="row"><button class="sm" data-ytc="on">Switch channel</button><button class="sm quiet bad" data-ytc="off">Disconnect</button></div></div>
     <div class="help">To post to a different channel, press Switch channel and pick it on the Google page. Scheduled clips go to whichever channel is connected when their time comes.</div>
-    ${tab==='settings'?`<div class="row" style="margin-top:10px"><span class="mut" style="font-size:13.5px">${(y.queue||[]).length?`${y.queue.length} clip${y.queue.length>1?'s':''} scheduled.`:'Nothing scheduled yet.'}</span><button class="sm" data-ytc="go">Open Scheduled</button></div>`:''}`;
+    ${tab==='settings'?`<div class="row" style="margin-top:10px"><span class="mut" style="font-size:13.5px">${(y.queue||[]).length?`${y.queue.length} clip${y.queue.length>1?'s':''} scheduled. Changed the posting times? Press Reschedule all there.`:'Nothing scheduled yet.'}</span><button class="sm" data-ytc="go">Open Scheduled</button></div>`:''}`;
   else body=`<div class="row between"><div><b>YouTube</b><div style="font-size:13px;margin-top:2px"><span class="mut">${y.configured?'Not connected.':'Not set up yet: paste the client ID and secret from Google Cloud first (steps below).'}</span></div></div>
       <button class="sm pri" data-ytc="on">Connect YouTube</button></div>
     ${y.error?`<div class="err" style="font-size:13px;margin-top:6px">${esc(y.error)}</div>`:''}${steps}`;
@@ -1003,6 +1004,9 @@ document.addEventListener('click',async e=>{
 
 // ---------- Scheduled tab: clips waiting to be posted, each at its time
 let schedSig='';
+function schedPlan(){const p=(yt&&yt.plan)||{},r=+p.random||0;
+  const gap=r?`${p.gap}–${+(+p.gap+r/60).toFixed(2)} h apart at random minutes`:`${p.gap} h apart`;
+  return `Posts up to ${p.per_day} a day, ${gap}, between ${esc(p.start)} and ${esc(p.end)} (${esc(p.tz)}), as ${esc(yt.privacy)}`}
 function renderSched(){
   const el=$('sched');if(!el)return;
   if(!yt){el.innerHTML='<div class="card mut">Loading…</div>';return}
@@ -1024,10 +1028,10 @@ function renderSched(){
   const notes=[];
   if(!yt.connected||yt.pending)notes.push(`<div style="margin-top:12px">${!yt.connected&&!yt.pending?'<div class="err" style="font-size:13.5px;margin-bottom:8px">YouTube isn\'t connected, so nothing gets posted.</div>':''}${ytCard()}</div>`);
   else if(yt.paused)notes.push(`<div class="sq-note warn"><span>Posting is paused. When you resume, a clip whose time has passed goes up first and the rest move to the next free times.</span></div>`);
-  const r=+p.random||0,gapTxt=r?`${p.gap}–${+(+p.gap+r/60).toFixed(2)} h apart at random minutes`:`${p.gap} h apart`;
-  const plan=`Posts up to ${p.per_day} a day, ${gapTxt}, between ${esc(p.start)} and ${esc(p.end)} (${esc(p.tz)}), as ${esc(yt.privacy)}.`;
+  const plan=schedPlan()+'.';
   el.innerHTML=`<div class="card"><div class="row between"><h2 style="margin:0">Scheduled</h2>
-      ${yt.connected?`<button class="sm" data-sqa="pause">${yt.paused?'Resume posting':'Pause posting'}</button>`:''}</div>
+      <div class="row" style="flex:none">${q.some(i=>i.status==='waiting')?`<button class="sm" data-sqa="reslot" title="Give every waiting clip a new time from the current posting settings, in the same order">Reschedule all</button>`:''}
+      ${yt.connected?`<button class="sm" data-sqa="pause">${yt.paused?'Resume posting':'Pause posting'}</button>`:''}</div></div>
     <div class="help" style="margin-top:6px">${plan} <a href="#" data-sqgo="settings">Change</a></div>
     ${yt.connected&&!yt.pending?`<div class="row between" style="margin-top:10px;font-size:13.5px"><span class="okc">✓ Posting to ${esc(yt.channel||'your channel')}</span><button class="sm" data-ytc="on">Switch channel</button></div>`:''}${notes.join('')}</div>
     <div class="card">${q.length?rows:`<div class="empty mut">Nothing scheduled. In Review, press <b>Schedule</b> on a clip: it gets the next free time${yt.next_slot?` (${esc(yt.next_slot.label)})`:''} and shows up here.</div>`}</div>
@@ -1063,6 +1067,8 @@ $('sched').addEventListener('click',async e=>{
   const b=e.target.closest('[data-sqa]');if(!b)return;
   const act=b.dataset.sqa,row=b.closest('[data-sq]'),key=row?row.dataset.sq:'';
   if(act==='post-now'&&!await ask('Post to YouTube now?','This clip goes up now instead of at its scheduled time.','Post now'))return;
+  if(act==='reslot'){const n=(yt.queue||[]).filter(i=>i.status==='waiting').length;
+    if(!await ask(`Reschedule ${n} clip${n>1?'s':''}?`,`Each waiting clip gets a new time from the current settings (${schedPlan()}), in the same order. A clip that's uploading keeps its time.`,'Reschedule'))return}
   const body={action:act,key};
   if(act==='move')body.dir=+b.dataset.dir;if(act==='pause')body.paused=!yt.paused;if(act==='desc-reset'){body.action='description';body.description=''}
   if(act==='post-now'||act==='retry'){const t=row.querySelector('[data-sqt]');if(t&&t.value.trim())await post('/api/youtube/queue',{action:'title',key,title:t.value.trim()})}

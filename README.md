@@ -52,7 +52,7 @@ Add `--service` to either one to also start the dashboard automatically (systemd
     - This is for moments detection missed, for example during the first minute, while chat is still building its baseline.
     - A clip made by hand at a spot you deleted brings it back. Clicking a spot that already has a clip doesn't duplicate it.
   - The main actions sit on the page (Fix failed clips, Re-make clips, Add clip-request clips). The rarer ones are under **More**: list moments, move, delete recording, delete session.
-  - **Re-make clips** redoes the session with the current settings.
+  - **Re-make clips** redoes the session with the current settings. Clips posted to YouTube or on the Scheduled list are never overwritten, renamed or redone: they stay exactly as they are, and **Redo** is hidden on them. A scheduled clip (or its session) can't be deleted until you unschedule it.
     - A moment whose clip start is within half a clip length of an existing clip **overwrites that clip**. It keeps the same number, and the folder is renamed if the start moved.
     - New moments become new clips.
     - Clips that no moment matches any more are kept. Deleted clips stay deleted.
@@ -175,7 +175,7 @@ Captions are timed to the words, not to whisper's long blocks, which used to sta
 Clips can go straight to your channel as Shorts. Nothing is posted unless you press a button.
 - **Post now** uploads the clip with the title you picked (or the first AI suggestion), the description and #Shorts.
 - **Schedule for …** puts the clip on the **Scheduled** tab with the next free time. Times come from **Settings → YouTube**: daily window (default 10:00–22:00), hours between posts and posts per day, in your time zone. Each post also gets up to 60 random extra minutes (Settings → YouTube → Random extra minutes; 0 = exact times), so posts land at times like 10:37 and 14:02 and the gaps vary (3–4 h by default). Posts made today count toward the day's limit.
-- The **Scheduled** tab lists the clips by day and time. You can edit each title, move a clip earlier or later (it swaps times with its neighbour), **Post now**, **Remove**, or **Pause posting** for all of them.
+- The **Scheduled** tab lists the clips by day and time. You can edit each title, move a clip earlier or later (it swaps times with its neighbour), **Post now**, **Remove**, or **Pause posting** for all of them. After changing the posting times in Settings, press **Reschedule all**: every waiting clip gets a new time from the new settings, in the same order.
 - When a clip's time comes, the dashboard uploads it (so the machine running it has to be on). If times were missed while it was off, the first clip goes up and the rest move to the next free times, so they don't all post at once.
 - A failed post stays on the list with **Retry now** and shows in Needs attention. Posted clips are listed under **Posted** with a link.
 

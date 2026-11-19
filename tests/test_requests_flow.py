@@ -188,3 +188,39 @@ class TimelineAndManual(AddRequestClips):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RemakeKeepsPostedAndScheduled(RemakeFollowsSettings):
+    def test_remake_overwrites_time_matches_with_new_settings(self):  # covered by the parent class
+        pass
+
+    def tearDown(self):
+        (clipper.HOME / clipper.YT_QUEUE).unlink(missing_ok=True)
+        super().tearDown()
+
+    def test_posted_and_scheduled_clips_are_left_alone(self):
+        self.set(clip_requests="true")
+        clipper.cmd_process(self.s)
+        one, two = self.names()
+        (self.s / "clips" / one / "review.json").write_text(json.dumps(
+            {"state": "posted", "video_id": "v1", "url": "https://www.youtube.com/shorts/v1"}))
+        (clipper.HOME / clipper.YT_QUEUE).write_text(json.dumps({"paused": False, "history": [], "items": [
+            {"key": f"{self.s.name}/{two}", "sid": self.s.name, "name": two, "at": "2099-01-06T04:30:00Z",
+             "status": "waiting"}]}))
+        self.assertEqual(clipper.locked_clips(self.s), {one: "posted", two: "scheduled"})
+        mt = {n: (self.s / "clips" / n / "captioned.mp4").stat().st_mtime for n in (one, two)}
+
+        self.set(lead_seconds="5", length_seconds="8")                 # Re-make with other settings
+        clipper.cmd_process(self.s)
+        self.assertEqual(self.names(), [one, two])                     # not renamed, no duplicates
+        for n in (one, two):
+            self.assertEqual((self.s / "clips" / n / "captioned.mp4").stat().st_mtime, mt[n])
+        clipper.cmd_process(self.s, redo=[one, two])                   # Redo skips them too
+        for n in (one, two):
+            self.assertEqual((self.s / "clips" / n / "captioned.mp4").stat().st_mtime, mt[n])
+
+        # the dashboard won't delete a scheduled clip (or its session), and marks both
+        det = server.session_detail(self.s.name)
+        self.assertEqual({c["name"]: c["locked"] for c in det["clips"]}, {one: "posted", two: "scheduled"})
+        self.assertIn("unschedule", server.delete_session(self.s.name, False))
+        self.assertTrue((self.s / "clips" / two).is_dir())

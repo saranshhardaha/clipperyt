@@ -129,6 +129,32 @@ class Slots(unittest.TestCase):
         self.assertTrue(any(t.minute not in (0, 30) for t in ts))      # not on round times
 
 
+class Reschedule(unittest.TestCase):
+    def test_reslot_follows_new_settings_and_keeps_order(self):
+        from unittest import mock
+        now = datetime(2026, 11, 20, 3, 0, tzinfo=timezone.utc)            # 08:30 IST
+        q = {"paused": False, "history": [], "items": [
+            {"key": "s/a", "at": "2026-11-20T04:30:00Z", "status": "waiting"},
+            {"key": "s/b", "at": "2026-11-20T07:30:00Z", "status": "waiting"},
+            {"key": "s/c", "at": "2026-11-20T05:00:00Z", "status": "uploading"},   # keeps its time
+            {"key": "s/d", "at": "2026-11-21T04:30:00Z", "status": "waiting"}]}
+        cfg = {**CFG, "slots_per_day": 3, "slot_gap_hours": 2, "window_start": "16:00", "random_minutes": 0}
+        with mock.patch.object(server, "yt_cfg", return_value=cfg), \
+                mock.patch.object(server, "scheduled_clips", return_value=[]), \
+                mock.patch.object(server, "save_queue") as saved:
+            msg = server.reslot(q, now)
+        self.assertTrue(saved.called)
+        at = {i["key"]: i["at"] for i in q["items"]}
+        self.assertEqual(at["s/c"], "2026-11-20T05:00:00Z")
+        # 16:00 and 18:00 IST; the uploading clip is the day's third post, so d moves to tomorrow 16:00
+        self.assertEqual([at["s/a"], at["s/b"], at["s/d"]],
+                         ["2026-11-20T10:30:00Z", "2026-11-20T12:30:00Z", "2026-11-21T10:30:00Z"])
+        self.assertIn("Rescheduled 3 clips", msg)
+        with mock.patch.object(server, "yt_cfg", return_value=cfg), \
+                mock.patch.object(server, "scheduled_clips", return_value=[]), mock.patch.object(server, "save_queue"):
+            self.assertEqual(server.reslot(q, now), "Times already match the settings")
+
+
 class OldConfig(unittest.TestCase):
     def test_missing_youtube_section_shows_defaults(self):
         import settings_schema

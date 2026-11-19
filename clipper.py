@@ -826,10 +826,42 @@ def purge_trash(session: Path, days: float = TRASH_DAYS) -> int:
     return n
 
 
+YT_QUEUE = "youtube-queue.json"  # in HOME; written by server.py (the posting schedule)
+
+
+def locked_clips(session: Path) -> dict[str, str]:
+    """Clips that re-clipping must leave alone: {folder: "posted" | "scheduled"}.
+    Posted = on YouTube (or uploaded to go public later); scheduled = on the posting list.
+    Re-make / Redo would replace or rename their video, so they're kept exactly as they are."""
+    out: dict[str, str] = {}
+    try:
+        for i in json.loads((HOME / YT_QUEUE).read_text()).get("items", []):
+            if i.get("sid") == session.name:
+                out[i.get("name", "")] = "scheduled"
+    except Exception:
+        pass
+    for _, _, f in clip_folders(session):
+        try:
+            r = json.loads((f / "review.json").read_text())
+        except Exception:
+            continue
+        if r.get("video_id"):
+            later = r.get("privacy") == "private" and str(r.get("publish_at") or "") > time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            out[f.name] = "scheduled" if later else "posted"
+        elif r.get("state") == "posted":
+            out.setdefault(f.name, "posted")
+    return out
+
+
 def _redo_clips(session: Path, cfg: dict, folders: list[str] | None) -> None:
-    """Re-cut/caption/render clips in place (None = every failed clip)."""
+    """Re-cut/caption/render clips in place (None = every failed clip). Posted and scheduled
+    clips are skipped."""
     folders = failed_clips(session) if folders is None else [f for f in folders if CLIP_RE.match(f)
                                                                and (session / "clips" / f).is_dir()]
+    locked = locked_clips(session)
+    if any(f in locked for f in folders):
+        log(f"kept as they are ({', '.join(f'{f} {locked[f]}' for f in folders if f in locked)})")
+        folders = [f for f in folders if f not in locked]
     log(f"redoing {len(folders)} clip(s) in {session.name}")
     if read_state().get("pid") == os.getpid():
         set_state("processing", session=session.name, clips=len(folders), done=0)
@@ -877,6 +909,8 @@ class _ClipMaker:
         name = f"{n:02d}_{spikes.fmt(start).replace(':', '-')}"
         d = self.session / "clips" / name
         if folder and folder != name and (self.session / "clips" / folder).is_dir():
+            if d.exists() and name in locked_clips(self.session):
+                raise RuntimeError(f"{name} is posted or scheduled; not replacing it")
             if d.exists():
                 shutil.rmtree(d)
             os.rename(self.session / "clips" / folder, d)
@@ -919,7 +953,8 @@ def _process(session: Path, cfg: dict) -> None:
 
     A moment whose clip start is within half a clip length of an existing clip overwrites
     that clip (same number; renamed if the start moved). Other moments become new clips.
-    Existing clips that match nothing are kept; clips the user deleted stay deleted."""
+    Existing clips that match nothing are kept; clips the user deleted stay deleted.
+    Posted and scheduled clips are never overwritten: a moment at their time is skipped."""
     moments = session_moments(session, cfg)
     nreq = sum(1 for m in moments if m.requests)
     log(f"{len(moments)} moments in {session.name}" + (f" ({nreq} with clip requests)" if nreq else ""))
@@ -929,12 +964,14 @@ def _process(session: Path, cfg: dict) -> None:
     half = c["length_seconds"] / 2
     gone = deleted_starts(session)
     have = clip_folders(session)
-    free = list(have)
+    locked = locked_clips(session)
+    kept = [fst for _, fst, f in have if f.name in locked]
+    free = [x for x in have if x[2].name not in locked]
     next_n = max((n for n, _, _ in have), default=0) + 1
     plan: list[tuple[int, spikes.Moment, str | None]] = []
     for m in moments:
         st = clip_start(m, c)
-        if any(abs(st - g) < half for g in gone):
+        if any(abs(st - g) < half for g in gone + kept):
             continue
         near = sorted((abs(st - fst), n, f) for n, fst, f in free if abs(st - fst) < half)
         if near:
@@ -944,6 +981,8 @@ def _process(session: Path, cfg: dict) -> None:
         else:
             plan.append((next_n, m, None))
             next_n += 1
+    if kept:
+        log(f"{len(kept)} posted/scheduled clip(s) kept as they are")
     if read_state().get("pid") == os.getpid():
         set_state("processing", session=session.name, clips=len(plan))
     if not plan:
