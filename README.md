@@ -32,7 +32,11 @@ Add `--service` to either one to also start the dashboard automatically (systemd
 - **Clips:** every finished clip from every session in one grid, newest first or by score. You can filter by channel or show only clip requests. Each clip can be played, downloaded (short or raw), and opened in its session.
 - **Sessions:** every recording with its length, chat, chatters, spikes, clips and size.
   - Open a session to play or download each clip, its raw cut and its captions, or to list spikes with the current settings.
-  - **Re-make clips** after you change the settings.
+  - **Re-make clips** redoes the session with the current settings.
+    - A moment whose clip start is within half a clip length of an existing clip **overwrites that clip**. It keeps the same number, and the folder is renamed if the start moved.
+    - New moments become new clips.
+    - Clips that no moment matches any more are kept. Deleted clips stay deleted.
+    - Length, delay, lead, output shape and captions all follow the new settings. **Redo** on a single clip does the same for that clip.
   - **Add clip-request clips** finds moments where 3 or more chatters asked for a clip and cuts only the ones without a clip yet. Existing clips stay.
   - **Fix N failed clips**, or **Fix** on a failed clip, cuts, captions and renders it again in place. **Redo** does the same for a working clip, for example after editing `speech.srt` or changing settings.
   - **Delete** (also on the Clips tab) removes a clip and its clips.md row. Deleted clips aren't re-added by "Add clip-request clips".

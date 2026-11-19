@@ -736,26 +736,39 @@ def deleted_starts(session: Path) -> list[float]:
         return []
 
 
-def _md_rows(session: Path) -> list[str]:
-    md = session / "clips.md"
-    return md.read_text(encoding="utf-8").split("\n") if md.exists() else []
+def clip_folders(session: Path) -> list[tuple[int, float, Path]]:
+    """(number, start seconds, folder) for every clips/NN_HH-MM-SS folder, failed ones too."""
+    d = session / "clips"
+    out = []
+    for p in d.iterdir() if d.exists() else []:
+        mm = CLIP_RE.match(p.name)
+        if mm and p.is_dir():
+            out.append((int(mm[1]), clip_folder_start(p.name), p))
+    return sorted(out)
 
 
-def _set_md_row(session: Path, n: int, row: str | None, header: list[str]) -> None:
-    """Replace (row) or remove (None) clip n's line in clips.md."""
-    lines = _md_rows(session) or header + ["", CREDIT_LINE.strip()]
-    hit = next((i for i, l in enumerate(lines) if re.match(rf"^\| {n} \|", l)), None)
-    if hit is not None:
-        if row is None:
-            del lines[hit]
-        else:
-            lines[hit] = row
-    elif row is not None:
-        cred = next((i for i, l in enumerate(lines) if l.startswith("Credit the streamer")), len(lines))
-        while cred > 0 and lines[cred - 1] == "":
-            cred -= 1
-        lines.insert(cred, row)
-    (session / "clips.md").write_text("\n".join(lines), encoding="utf-8")
+def _md_row(n: int, folder: Path) -> str:
+    start = spikes.fmt(clip_folder_start(folder.name))
+    try:
+        m = json.loads((folder / "moment.json").read_text())
+    except Exception:
+        m = {}
+    final = next((f for f in ("short.mp4", "captioned.mp4") if (folder / f).exists()), None)
+    score = m.get("score", "")
+    if not final:
+        why = (folder / "error.txt").read_text(encoding="utf-8").strip() if (folder / "error.txt").exists() else "no video"
+        return f"| {n} | {start} | {score} | FAILED | {why[:60].replace('|', '/')} |"
+    req = f"**clip requested ×{m['requests']}** · " if m.get("requests") else ""
+    said = " · ".join(t for t in m.get("top", [])[:3] if not t.startswith("clip requested")).replace("|", "/")
+    return f"| {n} | {start} | {score} | {req}{said} | {folder.name}/{final} |"
+
+
+def write_clips_md(session: Path, maker: "_ClipMaker | None" = None) -> None:
+    """clips.md always reflects the clip folders on disk (after make, redo, delete, add)."""
+    maker = maker or _ClipMaker(session, load_cfg())
+    rows = [_md_row(n, f) for n, _, f in clip_folders(session)]
+    (session / "clips.md").write_text("\n".join(maker.header() + rows) + "\n" + CREDIT_LINE + "\n",
+                                      encoding="utf-8")
 
 
 def delete_clip(session: Path, folder: str) -> None:
@@ -764,8 +777,8 @@ def delete_clip(session: Path, folder: str) -> None:
         raise ValueError("no such clip")
     start = clip_folder_start(folder)
     shutil.rmtree(session / "clips" / folder)
-    _set_md_row(session, int(CLIP_RE.match(folder)[1]), None, [])
     (session / DELETED).write_text(json.dumps(sorted(set(deleted_starts(session) + [start]))))
+    write_clips_md(session)
 
 
 def _redo_clips(session: Path, cfg: dict, folders: list[str] | None) -> None:
@@ -782,9 +795,9 @@ def _redo_clips(session: Path, cfg: dict, folders: list[str] | None) -> None:
     for i, f in enumerate(folders, 1):
         update_state(done=i - 1)
         n = int(CLIP_RE.match(f)[1])
-        row = maker.make(n, moment_for_clip(session, f, cfg), folder=f)
-        _set_md_row(session, n, row, maker.header())
+        row = maker.make(n, moment_for_clip(session, f, cfg), folder=f)  # follows current settings
         ok += "FAILED" not in row
+    write_clips_md(session, maker)
     update_state(done=len(folders))
     log(f"redo done: {ok}/{len(folders)} ok")
 
@@ -812,12 +825,19 @@ class _ClipMaker:
                 "| # | time in stream | score | chat said | file |", "|---|---|---|---|---|"]
 
     def make(self, n: int, m: spikes.Moment, folder: str | None = None) -> str:
-        """Returns the clips.md row. folder: redo an existing clip in place (its start is kept)."""
+        """Cut + caption + render with the CURRENT settings. Returns the clips.md row.
+        folder: overwrite that existing clip (same number); it's renamed if the start moved."""
         c, cap, rnd = self.cfg["clip"], self.cfg["captions"], self.cfg["render"]
-        start = clip_folder_start(folder) if folder else clip_start(m, c)
-        name = folder or f"{n:02d}_{spikes.fmt(start).replace(':', '-')}"
+        start = clip_start(m, c)
+        name = f"{n:02d}_{spikes.fmt(start).replace(':', '-')}"
         d = self.session / "clips" / name
+        if folder and folder != name and (self.session / "clips" / folder).is_dir():
+            if d.exists():
+                shutil.rmtree(d)
+            os.rename(self.session / "clips" / folder, d)
+            log(f"clip {n}: start moved {spikes.fmt(clip_folder_start(folder))} → {spikes.fmt(start)}")
         d.mkdir(exist_ok=True)
+        (d / "error.txt").unlink(missing_ok=True)
         raw = d / "raw.mp4"
         # saved first, so a clip that fails can still be fixed later
         (d / "moment.json").write_text(json.dumps(m.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
@@ -845,27 +865,54 @@ class _ClipMaker:
                     f"| {name}/{final.name} |")
         except Exception as e:
             log(f"  ! clip {n} failed: {e}")
+            (d / "error.txt").write_text(str(e).strip().splitlines()[-1] if str(e).strip() else repr(e), encoding="utf-8")
             return f"| {n} | {spikes.fmt(start)} | {m.score} | FAILED | {e!s:.60} |"
 
 
 def _process(session: Path, cfg: dict) -> None:
+    """Make / re-make clips with the CURRENT settings.
+
+    A moment whose clip start is within half a clip length of an existing clip overwrites
+    that clip (same number; renamed if the start moved). Other moments become new clips.
+    Existing clips that match nothing are kept; clips the user deleted stay deleted."""
     moments = session_moments(session, cfg)
     nreq = sum(1 for m in moments if m.requests)
     log(f"{len(moments)} moments in {session.name}" + (f" ({nreq} with clip requests)" if nreq else ""))
-    if read_state().get("pid") == os.getpid():
-        set_state("processing", session=session.name, clips=len(moments))
     (session / "spikes.json").write_text(json.dumps([m.to_dict() for m in moments], indent=2,
                                                     ensure_ascii=False))
-    if not moments:
+    c = cfg["clip"]
+    half = c["length_seconds"] / 2
+    gone = deleted_starts(session)
+    have = clip_folders(session)
+    free = list(have)
+    next_n = max((n for n, _, _ in have), default=0) + 1
+    plan: list[tuple[int, spikes.Moment, str | None]] = []
+    for m in moments:
+        st = clip_start(m, c)
+        if any(abs(st - g) < half for g in gone):
+            continue
+        near = sorted((abs(st - fst), n, f) for n, fst, f in free if abs(st - fst) < half)
+        if near:
+            _, n, f = near[0]
+            free = [x for x in free if x[2] != f]
+            plan.append((n, m, f.name))
+        else:
+            plan.append((next_n, m, None))
+            next_n += 1
+    if read_state().get("pid") == os.getpid():
+        set_state("processing", session=session.name, clips=len(plan))
+    if not plan:
+        if have:
+            write_clips_md(session)
         return
+    redo = sum(1 for p in plan if p[2])
+    log(f"{redo} clip(s) overwritten (same time), {len(plan) - redo} new, {len(free)} other existing kept")
     maker = _ClipMaker(session, cfg)
-    index = maker.header()
-    for n, m in enumerate(moments, 1):
-        update_state(done=n - 1)
-        index.append(maker.make(n, m))
-    index.append(CREDIT_LINE)
-    (session / "clips.md").write_text("\n".join(index) + "\n", encoding="utf-8")
-    update_state(done=len(moments))
+    for i, (n, m, folder) in enumerate(plan, 1):
+        update_state(done=i - 1)
+        maker.make(n, m, folder=folder)
+    write_clips_md(session, maker)
+    update_state(done=len(plan))
     log(f"done → {session.name}/clips.md")
 
 
@@ -878,7 +925,7 @@ def _session_chat(session: Path) -> tuple[dict, list]:
 
 def _add_clips(session: Path, cfg: dict, moments: list[spikes.Moment], what: str) -> int:
     """Clip the moments that don't have a clip yet; keep existing clips; append to clips.md."""
-    have = existing_clips(session)
+    have = clip_folders(session)  # failed ones count too — Fix handles those
     half = cfg["clip"]["length_seconds"] / 2
     gone = deleted_starts(session)
     new = [m for m in moments if not any(abs(clip_start(m, cfg["clip"]) - st) < half
@@ -890,14 +937,10 @@ def _add_clips(session: Path, cfg: dict, moments: list[spikes.Moment], what: str
         return 0
     maker = _ClipMaker(session, cfg)
     n0 = max((n for n, _, _ in have), default=0)
-    rows = []
     for i, m in enumerate(new, 1):
         update_state(done=i - 1)
-        rows.append(maker.make(n0 + i, m))
-    md = session / "clips.md"
-    old = (md.read_text(encoding="utf-8").replace(CREDIT_LINE, "").rstrip("\n") if md.exists()
-           else "\n".join(maker.header()))
-    md.write_text(old + "\n" + "\n".join(rows) + "\n" + CREDIT_LINE + "\n", encoding="utf-8")
+        maker.make(n0 + i, m)
+    write_clips_md(session, maker)
     try:  # keep spikes.json listing every moment that has a clip
         known = json.loads((session / "spikes.json").read_text()) if (session / "spikes.json").exists() else []
     except Exception:

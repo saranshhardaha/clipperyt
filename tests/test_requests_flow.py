@@ -104,5 +104,54 @@ class FixAndDelete(AddRequestClips):
             clipper.delete_clip(self.s, "../etc")
 
 
+class RemakeFollowsSettings(AddRequestClips):
+    def test_add_only_keeps_existing_and_is_idempotent(self):  # covered by the parent class
+        pass
+
+    def set(self, **kv):
+        import re
+        cfg = clipper.CONFIG.read_text()
+        for k, v in kv.items():
+            cfg, n = re.subn(rf"(?m)^{k}\s*=\s*[^#\n]*", f"{k} = {v} ", cfg)
+            self.assertEqual(n, 1, k)
+        clipper.CONFIG.write_text(cfg)
+
+    def names(self):
+        return [f.name for _, _, f in clipper.clip_folders(self.s)]
+
+    def test_remake_overwrites_time_matches_with_new_settings(self):
+        from tests.test_render import duration
+        self.set(clip_requests="true")
+        clipper.cmd_process(self.s)                                    # lead 2, length 6
+        before = self.names()
+        self.assertEqual(len(before), 2, before)
+        # an older clip that no current moment matches (e.g. made with other settings)
+        stray = self.s / "clips" / "07_00-00-10"
+        shutil.copytree(self.s / "clips" / before[0], stray)
+        stray_mtime = (stray / "captioned.mp4").stat().st_mtime
+
+        self.set(lead_seconds="5", length_seconds="8")                 # change settings, then Re-make
+        clipper.cmd_process(self.s)
+        after = self.names()
+        self.assertEqual(len(after), 3, after)                         # 2 overwritten + stray kept, nothing new
+        self.assertEqual([a.split("_")[0] for a in after], ["01", "02", "07"])  # same numbers
+        for old, new in zip(before, after[:2]):
+            self.assertAlmostEqual(clipper.clip_folder_start(new), clipper.clip_folder_start(old) - 3, delta=0.01)
+            self.assertFalse((self.s / "clips" / old).exists())        # renamed, not duplicated
+            self.assertAlmostEqual(duration(self.s / "clips" / new / "captioned.mp4"), 8, delta=1)
+        self.assertEqual((stray / "captioned.mp4").stat().st_mtime, stray_mtime)  # untouched
+        md = (self.s / "clips.md").read_text()
+        self.assertEqual(sum(1 for l in md.splitlines() if l.startswith("| ") and "---" not in l
+                             and not l.startswith("| #")), 3)
+        for a in after:
+            self.assertIn(a, md)
+
+        self.set(lead_seconds="7")                                     # single-clip Redo follows settings too
+        clipper.cmd_process(self.s, redo=[after[1]])
+        self.assertAlmostEqual(clipper.clip_folder_start(self.names()[1]),
+                               clipper.clip_folder_start(after[1]) - 2, delta=0.01)
+        self.assertEqual(len(self.names()), 3)
+
+
 if __name__ == "__main__":
     unittest.main()
