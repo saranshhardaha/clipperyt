@@ -126,9 +126,12 @@ def create_job(data: dict) -> tuple[dict | None, str | None]:
         if not SESSION_RE.match(sid) or not clipper.find_session(sid):
             return None, "no such session"
         job["session"] = sid
-        if data.get("mode") == "requests":
-            job["mode"] = "requests"
-        name = data.get("name") or (f"clip requests {sid}" if job.get("mode") else f"re-clip {sid}")
+        if data.get("mode") in ("requests", "redo"):
+            job["mode"] = data["mode"]
+        if job.get("mode") == "redo":
+            job["clips"] = [c for c in (data.get("clips") or []) if clipper.CLIP_RE.match(str(c))]
+        label = {"requests": "clip requests", "redo": "fix clips"}.get(job.get("mode"), "re-clip")
+        name = data.get("name") or f"{label} {sid}"
     else:
         return None, "kind must be watch, url or process"
     job["name"] = str(name)[:60]
@@ -161,8 +164,8 @@ def all_jobs() -> list[dict]:
     if is_running(st):
         out.append({"id": "cli", "kind": "cli", "name": f"terminal run · {st.get('channel') or st.get('url') or ''}",
                     "state": st, "running": True, "live": stats.live_stats(st), "readonly": True})
-    order = {"live": 0, "processing": 1, "downloading": 1, "queued": 2, "waiting": 3, "starting": 3}
-    out.sort(key=lambda j: (order.get(j["state"].get("status"), 5), -j.get("created", 0)))
+    # stable order: by name, never by activity (the UI groups by status itself)
+    out.sort(key=lambda j: (str(j.get("name", "")).lower(), j["id"]))
     return out
 
 
@@ -266,7 +269,7 @@ def session_detail(sid: str) -> dict:
             "raw": f"/files/{sid}/clips/{c.name}/raw.mp4" if (c / "raw.mp4").exists() else None,
             "srt": f"/files/{sid}/clips/{c.name}/speech.srt" if (c / "speech.srt").exists() else None,
             "score": m.get("score"), "messages": m.get("messages"), "top": m.get("top", []),
-            "requests": m.get("requests", 0), "kind": m.get("kind", "spike"),
+            "requests": m.get("requests", 0), "kind": m.get("kind", "spike"), "failed": not final,
         })
     try:
         meta = json.loads((d / "meta.json").read_text())
@@ -616,7 +619,18 @@ class H(BaseHTTPRequestHandler):
             skipped = sum(1 for d in all_session_dirs() if needs_move(d) and d.name in busy)
             return self.send(200, {"result": f"moving {len(todo)} session(s)"
                                              + (f", {skipped} busy — try again later" if skipped else "")})
-        if m := re.fullmatch(r"/api/sessions/([\w-]+)/(process|requests|delete-source|delete|move)", path):
+        if m := re.fullmatch(r"/api/sessions/([\w-]+)/clips/([\w-]+)/delete", path):
+            sid, name = m[1], m[2]
+            if not self.session_or_404(sid):
+                return
+            if sid in busy_sessions():
+                return self.send(400, {"error": "a job is using this session — wait for it to finish"})
+            try:
+                clipper.delete_clip(clipper.find_session(sid), name)
+            except ValueError as e:
+                return self.send(404, {"error": str(e)})
+            return self.send(200, {"result": f"deleted {name}"})
+        if m := re.fullmatch(r"/api/sessions/([\w-]+)/(process|requests|redo|delete-source|delete|move)", path):
             sid, act = m[1], m[2]
             if not self.session_or_404(sid):
                 return
@@ -627,11 +641,13 @@ class H(BaseHTTPRequestHandler):
                 if err:
                     return self.send(400, {"error": err})
                 return self.send(200, {"result": mover.enqueue(sid)})
-            if act in ("process", "requests"):
+            if act in ("process", "requests", "redo"):
                 if sid in busy_sessions():
                     return self.send(400, {"error": "already being worked on"})
+                if act == "redo" and not data.get("clips") and not clipper.failed_clips(clipper.find_session(sid)):
+                    return self.send(400, {"error": "no failed clips to fix"})
                 job, err = create_job({"kind": "process", "session": sid,
-                                       "mode": "requests" if act == "requests" else None})
+                                       "mode": act if act != "process" else None, "clips": data.get("clips")})
                 return self.send(200, {"result": start_job(job["id"]), "job": job})
             return self.send(200, {"result": delete_session(sid, act == "delete-source")})
         if path == "/api/settings":

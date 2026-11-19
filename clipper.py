@@ -5,6 +5,7 @@
   python clipper.py run <url>             one stream/video: live → record+clip, finished → download video + chat replay, clip
   python clipper.py process <session>     (re)make clips for a finished session
   python clipper.py spikes  <session>     just list spikes — use this to tune config.toml
+  python clipper.py redo <session> [clip…] re-make clips in place (no clip names = every failed clip)
   python clipper.py requests <session>    add clips for clip requests (≥3 chatters said "clip") not clipped yet
   python clipper.py status                is it waiting / recording / clipping?
   python clipper.py doctor                check ffmpeg/libass, streamlink, yt-dlp, whisper
@@ -647,14 +648,17 @@ def cmd_spikes(session: Path) -> None:
         print(f"  {spikes.fmt(m.onset)}  score {m.score:5.1f}  {m.messages:4d} msgs{tag}  | {' · '.join(m.top[:3])}")
 
 
-def cmd_process(session: Path, requests_only: bool = False, after_live: bool = False) -> None:
+def cmd_process(session: Path, requests_only: bool = False, after_live: bool = False,
+                redo: list[str] | None | bool = False) -> None:
     """(Re)make clips. requests_only: just add clips for clip-request moments that
     aren't clipped yet — existing clips are kept. after_live: if hourly passes already
     clipped part of the stream, only clip the rest."""
     cfg = load_cfg()
     with processing_slot(cfg["limits"].get("max_parallel_processing", 1)):
         done = clipped_until(session) if after_live else None
-        if requests_only:
+        if redo is not False:  # list of clip folders, or None = all failed ones
+            _redo_clips(session, cfg, redo)
+        elif requests_only:
             _process_requests(session, cfg)
         elif done is not None:
             _process_window(session, cfg, done, None)
@@ -682,6 +686,109 @@ def existing_clips(session: Path) -> list[tuple[int, float, Path]]:
     return sorted(out)
 
 
+def clip_folder_start(name: str) -> float:
+    mm = CLIP_RE.match(name)
+    if not mm:
+        raise ValueError(f"not a clip folder: {name}")
+    return int(mm[2]) * 3600 + int(mm[3]) * 60 + int(mm[4])
+
+
+def failed_clips(session: Path) -> list[str]:
+    """Clip folders without a finished video (cut/render failed, or interrupted)."""
+    d = session / "clips"
+    return sorted(p.name for p in d.glob("*/") if CLIP_RE.match(p.name)
+                  and not any((p / f).exists() for f in ("short.mp4", "captioned.mp4"))) if d.exists() else []
+
+
+def moment_for_clip(session: Path, folder: str, cfg: dict) -> spikes.Moment:
+    """The moment a clip folder was made from: its moment.json, else the matching spikes.json
+    entry, else one rebuilt from the folder's start time (clips made before moment.json)."""
+    d = session / "clips" / folder
+    keys = set(spikes.Moment.__dataclass_fields__)
+    if (d / "moment.json").exists():
+        try:
+            return spikes.Moment(**{k: v for k, v in json.loads((d / "moment.json").read_text()).items() if k in keys})
+        except Exception:
+            pass
+    start = clip_folder_start(folder)
+    c = cfg["clip"]
+    try:
+        for e in json.loads((session / "spikes.json").read_text()):
+            m = spikes.Moment(**{k: v for k, v in e.items() if k in keys})
+            if abs(clip_start(m, c) - start) <= 2:
+                return m
+    except Exception:
+        pass
+    onset = start + c["stream_delay_seconds"] + c["lead_seconds"]
+    top = []
+    if (d / "chat.txt").exists():
+        top = (d / "chat.txt").read_text(encoding="utf-8", errors="replace").splitlines()[:5]
+    return spikes.Moment(onset=onset, peak=onset, end=onset, score=0, messages=0, top=top)
+
+
+DELETED = ".deleted_clips"  # clip starts the user deleted — add-only runs don't bring them back
+
+
+def deleted_starts(session: Path) -> list[float]:
+    try:
+        return [float(x) for x in json.loads((session / DELETED).read_text())]
+    except Exception:
+        return []
+
+
+def _md_rows(session: Path) -> list[str]:
+    md = session / "clips.md"
+    return md.read_text(encoding="utf-8").split("\n") if md.exists() else []
+
+
+def _set_md_row(session: Path, n: int, row: str | None, header: list[str]) -> None:
+    """Replace (row) or remove (None) clip n's line in clips.md."""
+    lines = _md_rows(session) or header + ["", CREDIT_LINE.strip()]
+    hit = next((i for i, l in enumerate(lines) if re.match(rf"^\| {n} \|", l)), None)
+    if hit is not None:
+        if row is None:
+            del lines[hit]
+        else:
+            lines[hit] = row
+    elif row is not None:
+        cred = next((i for i, l in enumerate(lines) if l.startswith("Credit the streamer")), len(lines))
+        while cred > 0 and lines[cred - 1] == "":
+            cred -= 1
+        lines.insert(cred, row)
+    (session / "clips.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def delete_clip(session: Path, folder: str) -> None:
+    """Remove one clip (folder + clips.md row) and remember it so it isn't re-added."""
+    if not CLIP_RE.match(folder) or not (session / "clips" / folder).is_dir():
+        raise ValueError("no such clip")
+    start = clip_folder_start(folder)
+    shutil.rmtree(session / "clips" / folder)
+    _set_md_row(session, int(CLIP_RE.match(folder)[1]), None, [])
+    (session / DELETED).write_text(json.dumps(sorted(set(deleted_starts(session) + [start]))))
+
+
+def _redo_clips(session: Path, cfg: dict, folders: list[str] | None) -> None:
+    """Re-cut/caption/render clips in place (None = every failed clip)."""
+    folders = failed_clips(session) if folders is None else [f for f in folders if CLIP_RE.match(f)
+                                                               and (session / "clips" / f).is_dir()]
+    log(f"redoing {len(folders)} clip(s) in {session.name}")
+    if read_state().get("pid") == os.getpid():
+        set_state("processing", session=session.name, clips=len(folders), done=0)
+    if not folders:
+        return
+    maker = _ClipMaker(session, cfg)
+    ok = 0
+    for i, f in enumerate(folders, 1):
+        update_state(done=i - 1)
+        n = int(CLIP_RE.match(f)[1])
+        row = maker.make(n, moment_for_clip(session, f, cfg), folder=f)
+        _set_md_row(session, n, row, maker.header())
+        ok += "FAILED" not in row
+    update_state(done=len(folders))
+    log(f"redo done: {ok}/{len(folders)} ok")
+
+
 class _ClipMaker:
     """Cut + caption + render one moment into clips/NN_HH-MM-SS/ (shared by full and add-only runs)."""
 
@@ -704,16 +811,16 @@ class _ClipMaker:
                 "Links: " + " · ".join(links) + "\n",
                 "| # | time in stream | score | chat said | file |", "|---|---|---|---|---|"]
 
-    def make(self, n: int, m: spikes.Moment) -> str:
-        """Returns the clips.md row."""
+    def make(self, n: int, m: spikes.Moment, folder: str | None = None) -> str:
+        """Returns the clips.md row. folder: redo an existing clip in place (its start is kept)."""
         c, cap, rnd = self.cfg["clip"], self.cfg["captions"], self.cfg["render"]
-        start = clip_start(m, c)
-        name = f"{n:02d}_{spikes.fmt(start).replace(':', '-')}"
+        start = clip_folder_start(folder) if folder else clip_start(m, c)
+        name = folder or f"{n:02d}_{spikes.fmt(start).replace(':', '-')}"
         d = self.session / "clips" / name
         d.mkdir(exist_ok=True)
         raw = d / "raw.mp4"
-        said = " · ".join(([moment_label(m)] if m.requests else [])
-                          + [t for t in m.top[:3] if not t.startswith("clip requested")])
+        # saved first, so a clip that fails can still be fixed later
+        (d / "moment.json").write_text(json.dumps(m.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
         log(f"clip {n} at {spikes.fmt(start)} (score {m.score}{', ' + moment_label(m) if m.requests else ''})")
         try:
             timeline = self.session / "timeline.tsv"
@@ -732,7 +839,6 @@ class _ClipMaker:
                 (d / old).unlink(missing_ok=True)
             render.render(raw, subs if has_subs else None, final, rnd)
             (d / "chat.txt").write_text("\n".join(m.top), encoding="utf-8")
-            (d / "moment.json").write_text(json.dumps(m.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
             return (f"| {n} | {spikes.fmt(start)} | {m.score} | "
                     f"{('**' + moment_label(m) + '** · ' if m.requests else '')}"
                     f"{' · '.join(t for t in m.top[:3] if not t.startswith('clip requested')).replace('|', '/')} "
@@ -774,7 +880,9 @@ def _add_clips(session: Path, cfg: dict, moments: list[spikes.Moment], what: str
     """Clip the moments that don't have a clip yet; keep existing clips; append to clips.md."""
     have = existing_clips(session)
     half = cfg["clip"]["length_seconds"] / 2
-    new = [m for m in moments if not any(abs(clip_start(m, cfg["clip"]) - st) < half for _, st, _ in have)]
+    gone = deleted_starts(session)
+    new = [m for m in moments if not any(abs(clip_start(m, cfg["clip"]) - st) < half
+                                         for st in [st for _, st, _ in have] + gone)]
     log(f"{len(moments)} {what} in {session.name}: {len(moments) - len(new)} already clipped, {len(new)} new")
     if read_state().get("pid") == os.getpid():
         set_state("processing", session=session.name, clips=len(new), done=0)
@@ -1085,7 +1193,9 @@ def cmd_job(jid: str) -> None:
             if not session:
                 raise SystemExit(f"session {job['session']} not found (drive disconnected?)")
             set_state("processing", session=session.name)
-            cmd_process(session, requests_only=job.get("mode") == "requests")
+            mode = job.get("mode")
+            cmd_process(session, requests_only=mode == "requests",
+                        redo=(job.get("clips") or None) if mode == "redo" else False)
         else:
             raise SystemExit(f"unknown job kind {job['kind']!r}")
     except KeyboardInterrupt:
@@ -1129,6 +1239,11 @@ def main() -> None:
             cmd_run(args[1])
         except KeyboardInterrupt:
             pass
+        return
+    if args[0] == "redo" and len(args) >= 2:
+        load_cfg()
+        session = Path(args[1]) if Path(args[1]).is_dir() else find_session(args[1])
+        cmd_process(session, redo=args[2:] or None)
         return
     if args[0] == "window" and len(args) in (3, 4):
         session = Path(args[1])

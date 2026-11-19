@@ -53,6 +53,7 @@ label.f{display:block}label.f>span{display:block;font-size:12px;color:var(--mut)
 .tag{font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--mut);border:1px solid var(--line);border-radius:5px;padding:1px 5px}
 pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;max-height:300px;overflow:auto;font:12px/1.5 var(--mono);white-space:pre-wrap;margin:8px 0 0}
 .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(360px,1fr))}
+.jgroup{margin:18px 0 8px}.jgroup:first-child{margin-top:4px}
 .job{display:flex;flex-direction:column;gap:10px;margin:0}
 .job .name{font-weight:600;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
@@ -122,8 +123,9 @@ tr.click{cursor:pointer}tr.click:hover{background:var(--card2)}
   </div>
   <div id="permwarn"></div>
   <div class="row between" style="margin:4px 0 10px"><h2 style="margin:0">Jobs</h2>
-    <button class="sm" id="clear">Clear finished</button></div>
-  <div class="grid" id="jobs"></div>
+    <div class="row"><div class="seg" id="jview"><button data-v="group" class="on">By status</button><button data-v="az">A–Z</button></div>
+    <button class="sm" id="clear">Clear finished</button></div></div>
+  <div id="jobs"></div>
 </div>
 
 <!-- ============ CLIPS ============ -->
@@ -262,6 +264,23 @@ function jobCard(jb){
     ${openLogs.has(jb.id)?`<pre data-log="${esc(jb.id)}">…</pre>`:''}
   </div>`;
 }
+// Cards keep a fixed place: A–Z by name inside each group; groups always in the same order.
+const GROUPS=[['Recording',['live']],['Clipping',['processing','queued','downloading']],
+  ['Waiting for stream',['waiting','starting','idle']],['Stopped',['stopped','done','failed']]];
+let jview=(()=>{try{return localStorage.getItem('jview')||'group'}catch(e){return'group'}})();
+const byName=(a,b)=>String(a.name).localeCompare(String(b.name),undefined,{sensitivity:'base'})||a.id.localeCompare(b.id);
+function renderJobs(js){
+  js=[...js].sort(byName);
+  if(jview==='az')return `<div class="grid">${js.map(jobCard).join('')}</div>`;
+  const known=GROUPS.flatMap(g=>g[1]);
+  return GROUPS.map(([title,sts],i)=>{
+    const g=js.filter(x=>sts.includes(x.state.status||'stopped')||(i===3&&!known.includes(x.state.status)));
+    return g.length?`<h3 class="jgroup">${title} <span class="faint">${g.length}</span></h3><div class="grid">${g.map(jobCard).join('')}</div>`:'';
+  }).join('');
+}
+for(const b of $('jview').children)b.classList.toggle('on',b.dataset.v===jview);
+$('jview').onclick=e=>{const b=e.target.closest('button');if(!b)return;jview=b.dataset.v;try{localStorage.setItem('jview',jview)}catch(e){}
+  for(const x of $('jview').children)x.classList.toggle('on',x===b);jobsSig='';refreshJobs()};
 async function refreshJobs(){
   const js=await j('/api/jobs');if(!Array.isArray(js))return;
   const live=js.filter(x=>x.state.status==='live').length,run=js.filter(x=>x.running).length;
@@ -271,7 +290,7 @@ async function refreshJobs(){
   if(sig!==jobsSig){
     jobsSig=sig;
     const logs={};document.querySelectorAll('pre[data-log]').forEach(p=>logs[p.dataset.log]=[p.textContent,p.scrollTop]);
-    $('jobs').innerHTML=js.map(jobCard).join('')||'<div class="card empty">No jobs yet. Add a channel to watch, or paste a stream link above.</div>';
+    $('jobs').innerHTML=js.length?renderJobs(js):'<div class="card empty">No jobs yet. Add a channel to watch, or paste a stream link above.</div>';
     document.querySelectorAll('pre[data-log]').forEach(p=>{const o=logs[p.dataset.log];if(o){p.textContent=o[0];p.scrollTop=o[1]}});
   }
   for(const id of openLogs)loadLog(id);
@@ -331,6 +350,7 @@ async function openSession(id,soft){
     <div class="row between"><div class="row"><button class="sm" id="back">← Sessions</button><h2 style="margin:0">${esc(id)}</h2>${d.busy?busyPill(d.busy,d.move):''}</div>
       <div class="row"><button class="sm" id="spk">List spikes</button>
       <button class="sm" id="reqclip" ${d.busy||!s.has_source?'disabled':''} title="Cut clips for moments where 3+ chatters asked for a clip, that don't have a clip yet. Existing clips stay.">Add clip-request clips</button>
+      ${s.failed?`<button class="sm" id="fixall" style="color:var(--warn);border-color:var(--warn)" ${d.busy||!s.has_source?'disabled':''}>Fix ${s.failed} failed clip${s.failed>1?'s':''}</button>`:''}
       <button class="sm pri" id="reclip" ${d.busy||!s.has_source?'disabled':''}>Re-make clips</button>
       <button class="sm" id="delsrc" ${d.busy||!s.has_source?'disabled':''}>Free disk (delete video)</button>${d.in_recordings_folder?'':`<button class="sm" id="mvses" ${d.busy?'disabled':''}>${d.unsorted?'Move into channel folder':'Move to recordings folder'}</button>`}<button class="sm bad" id="delses" ${d.busy?'disabled':''}>Delete</button></div></div>
     <div class="mut" style="margin:8px 0 12px;overflow-wrap:anywhere">${esc(m.channel||'')} · ${esc(NAMES[m.platform]||m.platform||'')}${m.title?' · '+esc(m.title):''} · started ${esc(m.started||'')}
@@ -349,11 +369,13 @@ async function openSession(id,soft){
   if(old){$('clips-slot').replaceWith(old)}else{
     clipSig=sig;const c=document.createElement('div');c.className='clips';c.id='clips';
     c.innerHTML=d.clips.map(c=>`<div class="clip">
-      ${c.video?`<video src="${c.video}" controls preload="metadata" playsinline style="aspect-ratio:${c.vertical?'9/16':'16/9'}"></video>`:'<div class="err">render failed — see log</div>'}
+      ${c.video?`<video src="${c.video}" controls preload="metadata" playsinline style="aspect-ratio:${c.vertical?'9/16':'16/9'}"></video>`:'<div class="err" style="aspect-ratio:9/16;display:flex;align-items:center;justify-content:center;background:var(--bg);border-radius:6px;text-align:center;padding:10px">Clip failed — press Fix<br>(details in the job log)</div>'}
       <div style="margin-top:6px"><b>${esc(c.name)}</b> ${c.requests?`<span class="tag" style="color:var(--acc);border-color:var(--acc)">CLIP REQUEST ×${c.requests}</span> `:''}${c.score!=null?`<span class="mut">· score ${c.score}${c.messages?` · ${c.messages} msgs`:''}</span>`:''}</div>
       <div class="t">${esc((c.top||[]).filter(t=>!t.startsWith('clip requested')).slice(0,3).join(' · '))}</div>
       <div class="row" style="margin-top:6px">${c.video?`<a class="btn sm" href="${c.video}?download=1">Download</a>`:''}
-      ${c.raw?`<a class="btn sm" href="${c.raw}?download=1">Raw</a>`:''}${c.srt?`<a class="btn sm" href="${c.srt}" target="_blank">Captions</a>`:''}</div></div>`).join('')||'<div class="mut">No clips yet.</div>';
+      ${c.raw?`<a class="btn sm" href="${c.raw}?download=1">Raw</a>`:''}${c.srt?`<a class="btn sm" href="${c.srt}" target="_blank">Captions</a>`:''}
+      <button class="sm ${c.failed?'pri':''}" data-redo="${esc(c.name)}" ${d.busy||!s.has_source?'disabled':''} title="Cut, caption and render this clip again">${c.failed?'Fix':'Redo'}</button>
+      <button class="sm bad" data-del="${esc(c.name)}" ${d.busy?'disabled':''}>Delete</button></div></div>`).join('')||'<div class="mut">No clips yet.</div>';
     $('clips-slot').replaceWith(c);
   }
   $('back').onclick=()=>{curSession=null;history.replaceState(null,'','#sessions');loadSessions()};
@@ -361,6 +383,12 @@ async function openSession(id,soft){
     $('spikes').innerHTML=r.error?`<div class="err">${esc(r.error)}</div>`:`<div class="scroll" style="margin-top:12px"><table><thead><tr><th>Chat reacts</th><th>Clip starts</th><th class="n">Score</th><th class="n">Msgs</th><th>Chat said</th></tr></thead><tbody>${
       r.map(x=>`<tr><td>${x.onset}${x.requests?` <span class="tag" style="color:var(--acc);border-color:var(--acc)">CLIP REQUEST ×${x.requests}</span>`:''}</td><td>${x.clip_start}</td><td class="n">${x.score}</td><td class="n">${x.messages}</td><td class="mut">${esc(x.top.filter(t=>!t.startsWith('clip requested')).join(' · '))}</td></tr>`).join('')||'<tr><td colspan=5 class="mut">No spikes with the current settings.</td></tr>'}</tbody></table></div>
       <div class="help">Uses current Settings — tune Spike detection, then Re-make clips.</div>`};
+  if($('fixall'))$('fixall').onclick=async()=>{const r=await post(`/api/sessions/${id}/redo`,{});toast(r.error||'Fixing failed clips…');openSession(id,true)};
+  $('s-detail').onclick=async e=>{
+    const rb=e.target.closest('[data-redo]'),db=e.target.closest('[data-del]');
+    if(rb){const r=await post(`/api/sessions/${id}/redo`,{clips:[rb.dataset.redo]});toast(r.error||`Re-making ${rb.dataset.redo}…`);clipSig='';openSession(id,true)}
+    if(db){if(!confirm(`Delete clip ${db.dataset.del}? Its video, raw cut and captions are removed. This cannot be undone.`))return;
+      const r=await post(`/api/sessions/${id}/clips/${db.dataset.del}/delete`);toast(r.result||r.error);clipSig='';openSession(id,true)}};
   $('reqclip').onclick=async()=>{const r=await post(`/api/sessions/${id}/requests`);toast(r.error||'Finding clip requests — new clips appear here as they finish');openSession(id,true)};
   $('reclip').onclick=async()=>{const r=await post(`/api/sessions/${id}/process`);toast(r.result||r.error);openSession(id,true)};
   $('delsrc').onclick=async()=>{if(!confirm('Delete the full recording for this session? Clips stay, but you can no longer re-make them. This cannot be undone.'))return;
@@ -381,7 +409,11 @@ function clipCard(c){
     <div class="t">${esc((c.top||[]).join(' · '))}</div>
     <div class="row" style="margin-top:6px"><a class="btn sm" href="${c.video}?download=1">Download</a>
       ${c.raw?`<a class="btn sm" href="${c.raw}?download=1">Raw</a>`:''}
-      <a class="btn sm" href="#sessions/${encodeURIComponent(c.session)}">Session ›</a></div></div>`}
+      <a class="btn sm" href="#sessions/${encodeURIComponent(c.session)}">Session ›</a>
+      <button class="sm bad" data-cdel="${esc(c.session)}/${esc(c.name)}">Delete</button></div></div>`}
+$('c-grid').onclick=async e=>{const b=e.target.closest('[data-cdel]');if(!b)return;const[sid,name]=b.dataset.cdel.split('/');
+  if(!confirm(`Delete clip ${name} from ${sid}? This cannot be undone.`))return;
+  const r=await post(`/api/sessions/${sid}/clips/${name}/delete`);toast(r.result||r.error);if(!r.error)b.closest('.clip').remove()};
 async function loadClips(more){
   if(!more)clipOffset=0;
   const qs=new URLSearchParams({channel:$('c-chan').value,sort:$('c-sort').value,requested:$('c-req').checked?'1':'0',offset:clipOffset,limit:48});

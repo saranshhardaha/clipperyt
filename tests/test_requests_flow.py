@@ -61,5 +61,48 @@ class AddRequestClips(unittest.TestCase):
         self.assertEqual([c["requests"] for c in detail["clips"]], [0, 3])
 
 
+class FixAndDelete(AddRequestClips):
+    def test_add_only_keeps_existing_and_is_idempotent(self):  # covered by the parent class
+        pass
+
+    def test_fix_redo_delete(self):
+        clipper.load_cfg()
+        clipper.CONFIG.write_text(clipper.CONFIG.read_text().replace("clip_requests = false", "clip_requests = true"))
+        clipper.cmd_process(self.s)                                   # spike clip #1 + request clip #2
+        clips = clipper.existing_clips(self.s)
+        self.assertEqual(len(clips), 2)
+        one, two = clips[0][2], clips[1][2]
+        md_before = (self.s / "clips.md").read_text()
+
+        # break #1 the old way (no moment.json, no video) → it's "failed"
+        for f in ("captioned.mp4", "raw.mp4", "moment.json"):
+            (one / f).unlink(missing_ok=True)
+        self.assertEqual(clipper.failed_clips(self.s), [one.name])
+        detail = server.session_detail(self.s.name)
+        self.assertEqual([c["failed"] for c in detail["clips"]], [True, False])
+
+        clipper.cmd_process(self.s, redo=None)                        # "Fix failed clips"
+        self.assertEqual(clipper.failed_clips(self.s), [])
+        self.assertTrue((one / "captioned.mp4").exists())
+        mom = json.loads((one / "moment.json").read_text())          # rebuilt from spikes.json
+        self.assertGreater(mom["score"], 0)
+        md = (self.s / "clips.md").read_text()
+        self.assertEqual(md.count("| 1 |"), 1)                        # row replaced, not duplicated
+        self.assertEqual(md.count("Credit the streamer"), 1)
+        self.assertEqual(len(md.splitlines()), len(md_before.splitlines()))
+
+        mtime = (two / "captioned.mp4").stat().st_mtime
+        clipper.cmd_process(self.s, redo=[two.name])                  # "Redo" a working clip
+        self.assertGreater((two / "captioned.mp4").stat().st_mtime, mtime)
+
+        clipper.delete_clip(self.s, two.name)                         # "Delete"
+        self.assertFalse(two.exists())
+        self.assertNotIn(f"| 2 |", (self.s / "clips.md").read_text())
+        clipper.cmd_process(self.s, requests_only=True)              # must not bring it back
+        self.assertEqual([d.name for _, _, d in clipper.existing_clips(self.s)], [one.name])
+        with self.assertRaises(ValueError):
+            clipper.delete_clip(self.s, "../etc")
+
+
 if __name__ == "__main__":
     unittest.main()

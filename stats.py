@@ -159,7 +159,8 @@ def session_stats(d: Path) -> dict:
     clips_dir = d / "clips"
     sig = (tuple((f.name, f.stat().st_size) for f in files),
            (d / "spikes.json").stat().st_mtime if (d / "spikes.json").exists() else 0,
-           clips_dir.stat().st_mtime if clips_dir.exists() else 0,
+           # each clip folder's mtime: adding/removing a video inside it doesn't touch clips/ itself
+           tuple((c.name, c.stat().st_mtime) for c in clips_dir.iterdir() if c.is_dir()) if clips_dir.exists() else (),
            (d / "stream.ts").stat().st_size if (d / "stream.ts").exists() else 0)
     hit = _sess_cache.get(str(d))
     if hit and hit[0] == sig:

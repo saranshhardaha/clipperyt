@@ -34,6 +34,9 @@ Add `--service` to either one to also start the dashboard automatically (systemd
   - Open a session to play or download each clip, its raw cut and its captions, or to list spikes with the current settings.
   - **Re-make clips** after you change the settings.
   - **Add clip-request clips** finds moments where 3 or more chatters asked for a clip and cuts only the ones without a clip yet. Existing clips stay.
+  - **Fix N failed clips**, or **Fix** on a failed clip, cuts, captions and renders it again in place. **Redo** does the same for a working clip, for example after editing `speech.srt` or changing settings.
+  - **Delete** (also on the Clips tab) removes a clip and its clips.md row. Deleted clips aren't re-added by "Add clip-request clips".
+  - CLI: `clipper.py redo <session> [clip…]`. With no clip names it redoes every failed clip.
   - **Free disk** deletes the full recording but keeps the clips.
 - **Settings:** every option in `config.toml` as a form, with help text. **Advanced** is the raw TOML editor. Saved settings apply to each job's next stream or clip run.
 - **System:** free disk, totals, CPU load, the encoder in use, and which tools are installed (ffmpeg plus libass, streamlink, yt-dlp, whisper, the model).
