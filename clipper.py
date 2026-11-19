@@ -654,14 +654,16 @@ def cmd_spikes(session: Path) -> None:
 
 
 def cmd_process(session: Path, requests_only: bool = False, after_live: bool = False,
-                redo: list[str] | None | bool = False) -> None:
+                redo: list[str] | None | bool = False, manual_at: float | None = None) -> None:
     """(Re)make clips. requests_only: just add clips for clip-request moments that
     aren't clipped yet — existing clips are kept. after_live: if hourly passes already
     clipped part of the stream, only clip the rest."""
     cfg = load_cfg()
     with processing_slot(cfg["limits"].get("max_parallel_processing", 1)):
         done = clipped_until(session) if after_live else None
-        if redo is not False:  # list of clip folders, or None = all failed ones
+        if manual_at is not None:
+            _manual_clip(session, cfg, manual_at)
+        elif redo is not False:  # list of clip folders, or None = all failed ones
             _redo_clips(session, cfg, redo)
         elif requests_only:
             _process_requests(session, cfg)
@@ -990,6 +992,68 @@ def clipped_until(session: Path) -> float | None:
         return None
 
 
+def session_timeline(session: Path, cfg: dict) -> dict:
+    """Chat per bar across the whole stream + every moment and clip, for the session page graph.
+    Times are seconds of chat time (the same clock as moment onsets)."""
+    import math
+    meta, chat = _session_chat(session)
+    rec = meta.get("rec_start_ms", 0)
+    times = [(ts - rec) / 1000 for ts, _, _ in chat if ts >= rec]
+    dur = 0.0
+    tl = session / "timeline.tsv"
+    if tl.exists():
+        stamps = [int(x) for x in tl.read_text().split()[0::2] if x.isdigit()]
+        if stamps:
+            dur = (stamps[-1] - rec) / 1000
+    if not dur and not meta.get("duration"):  # past video without a known length: ask the file
+        video = next((session / f for f in ("stream.mp4", "stream.mkv", "stream.ts") if (session / f).exists()), None)
+        if video:
+            r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                                str(video)], capture_output=True, text=True)
+            try:
+                dur = float(r.stdout.strip())
+            except ValueError:
+                pass
+    dur = max(dur, float(meta.get("duration") or 0), max(times, default=0.0), 60.0)
+    bin_s = max(10, int(math.ceil(dur / 360 / 10.0)) * 10)
+    bins = [0] * max(1, int(math.ceil(dur / bin_s)))
+    for t in times:
+        bins[min(len(bins) - 1, int(t // bin_s))] += 1
+    c = cfg["clip"]
+    moments = [{"onset": m.onset, "end": m.end, "score": m.score, "requests": m.requests, "kind": m.kind,
+                "clip_start": clip_start(m, c)} for m in (spikes.find_all(chat, rec, cfg["spikes"]) if chat else [])]
+    clips = []
+    for n, start, f in clip_folders(session):
+        try:
+            mom = json.loads((f / "moment.json").read_text())
+        except Exception:
+            mom = {}
+        clips.append({"name": f.name, "n": n, "start": start, "length": c["length_seconds"],
+                      "failed": not any((f / x).exists() for x in ("short.mp4", "captioned.mp4")),
+                      "kind": mom.get("kind", "spike"), "requests": mom.get("requests", 0)})
+    return {"duration": dur, "bin_seconds": bin_s, "bins": bins, "moments": moments, "clips": clips,
+            "delay": c["stream_delay_seconds"], "lead": c["lead_seconds"], "length": c["length_seconds"],
+            "vod": bool(meta.get("vod"))}
+
+
+def _manual_clip(session: Path, cfg: dict, at: float) -> None:
+    """A clip where the user clicked on the chat timeline (`at` = chat time, like a moment's onset).
+    Cut with the current settings; brings back a clip at the same spot if it had been deleted."""
+    from collections import Counter
+    meta, chat = _session_chat(session)
+    rec = meta.get("rec_start_ms", 0)
+    near = [txt for ts, _, txt in chat if at - 5 <= (ts - rec) / 1000 < at + 20]
+    common = Counter(spikes._norm(t) for t in near if t.strip()).most_common(5)
+    m = spikes.Moment(onset=max(0.0, at), peak=max(0.0, at), end=at + 20, score=0, messages=len(near),
+                      top=[f"{t} ×{n}" if n > 1 else t for t, n in common], kind="manual")
+    st, half = clip_start(m, cfg["clip"]), cfg["clip"]["length_seconds"] / 2
+    gone = deleted_starts(session)
+    if any(abs(g - st) < half for g in gone):
+        (session / DELETED).write_text(json.dumps([g for g in gone if abs(g - st) >= half]))
+    if not _add_clips(session, cfg, [m], f"manual clip at {spikes.fmt(at)}"):
+        log("there's already a clip at that spot — use Redo on it to re-make it")
+
+
 def cmd_window(session: Path, since: float, until: float | None) -> None:
     cfg = load_cfg()
     with processing_slot(cfg["limits"].get("max_parallel_processing", 1)):
@@ -1217,6 +1281,10 @@ def cmd_watch(job: dict | None = None) -> None:
     while True:
         cfg = load_cfg()  # re-read each stream, so edits apply next time
         if job:  # a dashboard job brings its own channels; everything else is global config
+            try:
+                job = load_job(job["id"])  # edited in the dashboard → applies from the next stream
+            except Exception:
+                pass
             cfg["stream"]["channels"] = job["channels"]
             cfg["stream"]["record_from"] = job.get("record_from") or next(iter(job["channels"]))
         try:
@@ -1314,7 +1382,8 @@ def cmd_job(jid: str) -> None:
             set_state("processing", session=session.name)
             mode = job.get("mode")
             cmd_process(session, requests_only=mode == "requests",
-                        redo=(job.get("clips") or None) if mode == "redo" else False)
+                        redo=(job.get("clips") or None) if mode == "redo" else False,
+                        manual_at=float(job["at"]) if mode == "manual" else None)
         else:
             raise SystemExit(f"unknown job kind {job['kind']!r}")
     except KeyboardInterrupt:

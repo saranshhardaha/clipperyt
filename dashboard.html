@@ -159,6 +159,24 @@ tr.click{cursor:pointer}tr.click:hover td{background:var(--panel2)}
 .meter{height:6px;border-radius:99px;background:var(--panel2);overflow:hidden;margin-top:8px}.meter i{display:block;height:100%;background:var(--ink)}
 .big{font-size:24px;font-weight:650;letter-spacing:-.02em}
 .alert{border-color:color-mix(in srgb,var(--bad) 60%,var(--rule))}
+/* ---- session timeline + More menu */
+.tlwrap{position:relative;margin-top:4px}
+.tl{width:100%;height:132px;display:block;cursor:crosshair;touch-action:manipulation}
+.tl .bar{fill:var(--rule2)}.tl .band{fill:color-mix(in srgb,var(--cue) 22%,transparent);stroke:var(--cue);stroke-width:1}
+.tl .band.failed{fill:color-mix(in srgb,var(--bad) 18%,transparent);stroke:var(--bad)}
+.tl .band.manual{stroke-dasharray:3 2}
+.tl .mk{fill:var(--standby)}.tl .mk.req{fill:var(--cue)}
+.tl .hover{stroke:var(--ink);stroke-width:1;opacity:.6}
+.tl .axis{fill:var(--faint);font:11px var(--sans)}
+.tlpop{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px;font-size:13.5px}
+.tlkey{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--faint);margin-top:6px}
+.tlkey i{display:inline-block;width:10px;height:10px;margin-right:6px;vertical-align:-1px;border-radius:2px}
+.clip.hl{outline:2px solid var(--cue);outline-offset:4px;border-radius:8px}
+details.more{position:relative}
+details.more>summary{list-style:none}details.more>summary::-webkit-details-marker{display:none}
+details.more .menu{position:absolute;right:0;top:calc(100% + 6px);z-index:4;min-width:230px;background:var(--panel);border:1px solid var(--rule2);border-radius:9px;padding:6px;display:flex;flex-direction:column;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+details.more .menu button{border:0;justify-content:flex-start;width:100%;padding:8px 10px}
+
 /* ---- needs attention */
 .attn{border:1px solid color-mix(in srgb,var(--standby) 45%,var(--rule));background:color-mix(in srgb,var(--standby) 7%,var(--panel));border-radius:10px;padding:10px 14px;margin-bottom:18px}
 .attn.bad{border-color:color-mix(in srgb,var(--bad) 55%,var(--rule));background:color-mix(in srgb,var(--bad) 6%,var(--panel))}
@@ -329,8 +347,15 @@ function show(t){
 // ---------- jobs
 // "Add a channel or a link": one box. Channels collect as chips (one per platform; the first
 // records the video), a video/stream link makes a one-link job, a bare name asks for the platform.
-let nj={chans:[],video:0,parsed:null,t:0};
-function newJob(open){$('newjob').hidden=!open;$('newbtn').setAttribute('aria-expanded',open);if(open){njPrefill();$('nj-in').focus()}}
+let nj={chans:[],video:0,parsed:null,t:0,edit:null},lastJobs=[];
+function editJob(jb){  // same box, prefilled; "Save changes" instead of starting a new job
+  nj.edit=jb.id;nj.chans=Object.entries(jb.channels||{}).map(([platform,channel])=>({platform,channel}));
+  nj.video=Math.max(0,nj.chans.findIndex(c=>c.platform===jb.record_from));nj.parsed=null;
+  $('nj-in').value='';$('j-name').value=jb.name||'';$('j-auto').closest('label').hidden=true;
+  $('newjob').querySelector('h3').textContent=`Edit ${jb.name}`;njPreview();njRender();
+  $('newjob').hidden=false;$('newbtn').setAttribute('aria-expanded',true);$('newjob').scrollIntoView({behavior:'smooth',block:'nearest'});$('nj-in').focus()}
+function endEdit(){nj.edit=null;nj.chans=[];nj.video=0;$('j-auto').closest('label').hidden=false;$('newjob').querySelector('h3').textContent='Add a channel or a link'}
+function newJob(open){if(!open&&nj.edit)endEdit();$('newjob').hidden=!open;$('newbtn').setAttribute('aria-expanded',open);if(open){njPrefill();$('nj-in').focus()}}
 $('newbtn').onclick=()=>newJob($('newjob').hidden);$('newclose').onclick=()=>newJob(false);
 function njPrefill(){  // the default channels from Settings → Stream defaults, if any
   if(nj.chans.length||!settings)return;const v=settings.values;
@@ -341,7 +366,7 @@ function njRender(){
     ${i===nj.video?'<span class="vid">records video</span>':nj.chans.length>1?`<button data-njv="${i}" title="Record the video from this platform">Use for video</button>`:''}
     <button data-njx="${i}" aria-label="Remove ${NAMES[c.platform]} ${esc(c.channel)}">✕</button></span>`).join('');
   const p=nj.parsed,url=p&&p.kind==='url';
-  $('j-add').textContent=url?'Clip this link':'Start watching';
+  $('j-add').textContent=nj.edit?'Save changes':url?'Clip this link':'Start watching';
   $('j-add').disabled=!(url||nj.chans.length);
   $('nj-in').placeholder=nj.chans.length?'Add Twitch or Kick for the same streamer (optional)':'Paste a channel or stream link, or type a channel name';
   $('j-name').placeholder=url?'Name (optional)':nj.chans.length?`Name (default: ${nj.chans[nj.video].channel})`:'Name (optional)';
@@ -374,6 +399,10 @@ $('newjob').addEventListener('click',e=>{
   if(v){nj.video=+v.dataset.njv;njRender()}});
 $('j-add').onclick=async()=>{
   const p=nj.parsed,body={name:$('j-name').value.trim(),autostart:$('j-auto').checked};
+  if(nj.edit&&!(p&&p.kind==='url')){  // editing a watch job
+    const r=await post(`/api/jobs/${nj.edit}/edit`,{name:body.name,channels:Object.fromEntries(nj.chans.map(c=>[c.platform,c.channel])),record_from:nj.chans[nj.video].platform});
+    if(r.error){$('j-msg').textContent=r.error;return}
+    toast(`${r.job.name}: ${r.result}`);newJob(false);jobsSig='';refreshJobs();return}
   if(p&&p.kind==='url'){body.kind='url';body.url=p.url}
   else{body.kind='watch';body.channels=Object.fromEntries(nj.chans.map(c=>[c.platform,c.channel]));body.record_from=nj.chans[nj.video].platform}
   $('j-msg').textContent='';$('j-add').disabled=true;const r=await post('/api/jobs',body);
@@ -422,6 +451,7 @@ function jobCard(jb){
     ${body}
     <div class="acts">${main}
       <button class="sm quiet" data-a="log" aria-expanded="${openLogs.has(jb.id)}">${openLogs.has(jb.id)?'Hide log':'Log'}</button>
+      ${jb.kind==='watch'?`<button class="sm quiet" data-a="edit" title="Change channels, which one records the video, or the name">Edit</button>`:''}
       ${st.session?`<button class="sm quiet" data-a="open" data-s="${esc(st.session)}">Session</button>`:''}
       <span class="end">${jb.kind==='watch'||jb.kind==='url'?`<label class="switch" title="Start this job again when the dashboard restarts (e.g. after a reboot)"><input type="checkbox" data-a="auto" ${jb.autostart?'checked':''}>Autostart</label>`:''}
       ${run?`<button class="sm quiet bad" data-a="kill" title="Stop immediately, without clipping">Kill</button>`:''}${!run&&!ro?`<button class="sm quiet" data-a="delete">Delete</button>`:''}</span></div>
@@ -456,7 +486,7 @@ function renderJobs(js){
 $('filters').onclick=e=>{const b=e.target.closest('[data-f]');if(!b)return;jfilter=b.dataset.f;try{localStorage.setItem('jfilter',jfilter)}catch(e){}jobsSig='';refreshJobs()};
 setInterval(()=>document.querySelectorAll('.tc[data-since]').forEach(el=>el.textContent=tc(Date.now()/1000-el.dataset.since)),1000);
 async function refreshJobs(){
-  const js=await j('/api/jobs');if(!Array.isArray(js))return;
+  const js=await j('/api/jobs');if(!Array.isArray(js))return;lastJobs=js;
   const live=js.filter(x=>x.state.status==='live').length,run=js.filter(x=>x.running).length;
   $('dot').classList.toggle('on',live>0);
   const d0=sysCache&&sysCache.disks[0];
@@ -483,6 +513,7 @@ $('jobs').onclick=async e=>{
   if(a==='auto')return;
   if(a==='log'){openLogs.has(id)?openLogs.delete(id):openLogs.add(id);return refreshJobs()}
   if(a==='open'){curSession=b.dataset.s;return show('sessions')}
+  if(a==='edit'){const jb=(lastJobs||[]).find(x=>x.id===id);if(jb)editJob(jb);return}
   if(a==='kill'&&!confirm('Kill this job now? It stops immediately and nothing more gets clipped.'))return;
   if(a==='stop'&&!confirm('Stop this job? It finishes clipping what was recorded, then stops.'))return;
   if(a==='delete'&&!confirm('Delete this job? Its sessions and clips are kept.'))return;
@@ -527,12 +558,15 @@ async function openSession(id,soft){
   const head=`<div class="card">
     <div class="row" style="margin-bottom:10px"><button class="sm quiet" id="back">← All sessions</button></div>
     <div class="row between" style="align-items:flex-start;gap:12px"><div><h2 style="margin:0 0 2px">${esc(m.channel||id)}</h2><div class="mut" style="font-size:13px">${esc(id)}</div></div>${d.busy?busyPill(d.busy,d.move):''}</div>
-    <div class="row" style="margin-top:14px"><button class="sm quiet" id="spk">List moments</button>
-      <button class="sm" id="reqclip" ${d.busy||!s.has_source?'disabled':''} title="Cut clips for moments where 3+ chatters asked for a clip, that don't have a clip yet. Existing clips stay.">Add clip-request clips</button>
+    <div class="row" style="margin-top:14px">
       ${s.failed?`<button class="sm pri" id="fixall" ${d.busy||!s.has_source?'disabled':''}>Fix ${s.failed} failed clip${s.failed>1?'s':''}</button>`:''}
-      <button class="sm" id="reclip" ${d.busy||!s.has_source?'disabled':''} title="Cut, caption and render every clip again with the current settings">Re-make clips</button>
-      ${d.in_recordings_folder?'':`<button class="sm" id="mvses" ${d.busy?'disabled':''}>${d.unsorted?'Move into channel folder':'Move to recordings folder'}</button>`}
-      <span style="margin-left:auto" class="row"><button class="sm quiet" id="delsrc" ${d.busy||!s.has_source?'disabled':''} title="Clips stay, but they can't be re-made afterwards">Delete recording</button><button class="sm quiet bad" id="delses" ${d.busy?'disabled':''}>Delete session</button></span></div>
+      <button class="sm" id="reclip" ${d.busy||!s.has_source?'disabled':''} title="Cut, caption and render every clip again with the current settings; clips at the same time are overwritten">Re-make clips</button>
+      <button class="sm" id="reqclip" ${d.busy||!s.has_source?'disabled':''} title="Cut clips for moments where 3+ chatters asked for a clip, that don't have a clip yet. Existing clips stay.">Add clip-request clips</button>
+      <details class="more" style="margin-left:auto"><summary class="btn sm">More</summary><div class="menu">
+        <button id="spk">List moments</button>
+        ${d.in_recordings_folder?'':`<button id="mvses" ${d.busy?'disabled':''}>${d.unsorted?'Move into channel folder':'Move to recordings folder'}</button>`}
+        <button id="delsrc" ${d.busy||!s.has_source?'disabled':''} title="Clips stay, but they can't be re-made afterwards">Delete recording (keep clips)</button>
+        <button id="delses" class="bad" ${d.busy?'disabled':''}>Delete session</button></div></details></div>
     <div class="mut" style="margin:14px 0;font-size:13px;overflow-wrap:anywhere">${esc(NAMES[m.platform]||m.platform||'')}${m.title?`, “${esc(m.title)}”`:''}, started ${esc((m.started||'').replace('T',' '))}.
       ${m.source_url?` <a href="${esc(m.source_url)}" target="_blank" rel="noopener">Open source</a>`:''}${d.clips_md?` <a href="${d.clips_md}" target="_blank" style="margin-left:8px">clips.md</a>`:''}
       <div class="faint" style="font-size:12.5px;margin-top:2px">${esc(d.folder)}${d.in_recordings_folder?'':d.unsorted?' (not in a channel folder yet)':' (not in the recordings folder)'}${d.move&&d.move.status==='error'?` <span class="err">Move failed: ${esc(d.move.error)}</span>`:''}</div></div>
@@ -544,11 +578,14 @@ async function openSession(id,soft){
   const sig=JSON.stringify(d.clips.map(c=>c.video));
   const keepClips=soft&&sig===clipSig&&$('clips');const old=keepClips?$('clips'):null;
   const spikesHtml=soft&&$('spikes')?$('spikes').innerHTML:'';
-  $('s-detail').innerHTML=head+`<div class="card"><h2>Clips <span class="faint" style="font-weight:500">${d.clips.length}</span></h2><div id="clips-slot"></div></div>`;
+  const oldTl=soft&&tlFor===id?$('tl-card'):null;
+  const moreOpen=soft&&!!document.querySelector('#s-detail details.more[open]');
+  $('s-detail').innerHTML=head+`<div id="tl-slot"></div><div class="card"><h2>Clips <span class="faint" style="font-weight:500">${d.clips.length}</span></h2><div id="clips-slot"></div></div>`;
+  if(oldTl&&sig===clipSig)$('tl-slot').replaceWith(oldTl);else loadTimeline(id,s.has_source&&!d.busy);
   $('spikes').innerHTML=spikesHtml;
   if(old){$('clips-slot').replaceWith(old)}else{
     clipSig=sig;rememberTitles(d.clips,id);const c=document.createElement('div');c.className='clips';c.id='clips';
-    c.innerHTML=d.clips.map(c=>`<div class="clip">
+    c.innerHTML=d.clips.map(c=>`<div class="clip" data-clip="${esc(c.name)}">
       ${c.video?`<video src="${c.video}" controls preload="metadata" playsinline style="aspect-ratio:${c.vertical?'9/16':'16/9'}"></video>`:'<div class="failbox">This clip failed.<br>Press Fix to make it again. The job log has the reason.</div>'}
       <div class="row between"><span class="ch">${esc(clipTime(c.name))}</span>${c.requests?`<span class="flag req">Clip request ×${c.requests}</span>`:''}</div>
       <div class="meta">${c.score!=null?`Score ${c.score}`:''}${c.messages?`, ${c.messages} messages`:''}</div>
@@ -562,6 +599,8 @@ async function openSession(id,soft){
     $('clips-slot').replaceWith(c);
   }
   $('back').onclick=()=>{curSession=null;history.replaceState(null,'','#sessions');loadSessions()};
+  const more=document.querySelector('#s-detail details.more');
+  if(more){if(moreOpen)more.open=true;more.addEventListener('click',e=>{if(e.target.closest('.menu button'))more.open=false})}
   $('spk').onclick=async()=>{$('spikes').innerHTML='<div class="mut" style="margin-top:12px">Finding moments…</div>';const r=await j(`/api/sessions/${id}/spikes`);
     $('spikes').innerHTML=r.error?`<div class="err">${esc(r.error)}</div>`:`<div class="scroll" style="margin-top:12px"><table><thead><tr><th>Chat reacted</th><th>Clip starts</th><th class="n">Score</th><th class="n">Msgs</th><th>Chat said</th></tr></thead><tbody>${
       r.map(x=>`<tr><td>${x.onset}${x.requests?` <span class="flag req">Clip request ×${x.requests}</span>`:''}</td><td>${x.clip_start}</td><td class="n">${x.score}</td><td class="n">${x.messages}</td><td class="mut">${esc(x.top.filter(t=>!t.startsWith('clip requested')).join('  /  '))}</td></tr>`).join('')||'<tr><td colspan=5 class="mut">No moments with the current settings.</td></tr>'}</tbody></table></div>
@@ -579,6 +618,47 @@ async function openSession(id,soft){
   if($('mvses'))$('mvses').onclick=async()=>{const r=await post(`/api/sessions/${id}/move`);toast(r.result||r.error);openSession(id,true)};
   $('delses').onclick=async()=>{if(!confirm('Delete this whole session — recording, chat and clips? This cannot be undone.'))return;
     const r=await post(`/api/sessions/${id}/delete`);toast(r.result||r.error);curSession=null;loadSessions()};
+}
+
+// ---------- session timeline: chat across the whole stream, moments + clips, click to clip
+let tlFor='',tlData=null;
+const hms=t=>tc(t);
+async function loadTimeline(id,canClip){
+  const t=await j(`/api/sessions/${encodeURIComponent(id)}/timeline`);if(t.error||curSession!==id)return;
+  tlFor=id;tlData=t;const card=document.createElement('div');card.className='card';card.id='tl-card';
+  card.innerHTML=`<div class="row between"><h2 style="margin:0">Timeline</h2><span class="faint" style="font-size:12.5px">${hms(t.duration)} · bar = ${t.bin_seconds} s of chat</span></div>
+    <div class="tlwrap">${tlSvg(t)}</div><div class="tlpop" id="tl-pop"><span class="faint">${canClip?'Click a clip to jump to it, or anywhere else to make a clip there.':'Clips can be made here once the session has its recording and no job is using it.'}</span></div>
+    <div class="tlkey"><span><i style="background:var(--rule2)"></i>chat</span><span><i style="background:color-mix(in srgb,var(--cue) 40%,transparent);border:1px solid var(--cue)"></i>clip</span>
+      <span><i style="background:var(--standby)"></i>moment</span><span><i style="background:var(--cue)"></i>clip request</span><span><i style="background:color-mix(in srgb,var(--bad) 30%,transparent);border:1px solid var(--bad)"></i>failed clip</span></div>`;
+  const slot=$('tl-slot');if(slot)slot.replaceWith(card);else{const old=$('tl-card');if(old)old.replaceWith(card)}
+  const svg=card.querySelector('svg'),W=1000,dur=t.duration;
+  const tAt=e=>{const r=svg.getBoundingClientRect();return Math.max(0,Math.min(dur,(e.clientX-r.left)/r.width*dur))};
+  svg.addEventListener('mousemove',e=>{const x=tAt(e)/dur*W,h=svg.querySelector('.hover');h.setAttribute('x1',x);h.setAttribute('x2',x);h.style.display='';
+    svg.querySelector('.hovert').textContent=hms(tAt(e));svg.querySelector('.hovert').setAttribute('x',Math.min(W-60,x+4))});
+  svg.addEventListener('mouseleave',()=>{svg.querySelector('.hover').style.display='none';svg.querySelector('.hovert').textContent=''});
+  svg.addEventListener('click',e=>{const at=tAt(e);
+    const hit=t.clips.find(c=>at>=c.start+t.delay-2&&at<=c.start+t.delay+c.length+2);  // clips sit at chat time = video time + delay
+    if(hit){const el=document.querySelector(`#clips [data-clip="${CSS.escape(hit.name)}"]`);
+      if(el){el.scrollIntoView({behavior:'smooth',block:'center'});el.classList.add('hl');setTimeout(()=>el.classList.remove('hl'),2200);const v=el.querySelector('video');if(v)v.play().catch(()=>{})}
+      $('tl-pop').innerHTML=`<span>${hit.failed?'This clip failed. Fix it from its card.':`Clip ${esc(clipTime(hit.name))}.`}</span>`;return}
+    if(!canClip)return;
+    const start=Math.max(0,at-t.delay-t.lead);
+    $('tl-pop').innerHTML=`<span>Make a clip around <b>${hms(at)}</b>: it starts at ${hms(start)} and runs ${t.length} s.</span>
+      <button class="sm pri" id="tl-make">Make clip</button><button class="sm quiet" id="tl-cancel">Cancel</button>`;
+    $('tl-cancel').onclick=()=>{$('tl-pop').innerHTML='<span class="faint">Click a clip to jump to it, or anywhere else to make a clip there.</span>'};
+    $('tl-make').onclick=async()=>{$('tl-make').disabled=true;const r=await post(`/api/sessions/${encodeURIComponent(id)}/clip-at`,{at});
+      if(r.error){$('tl-pop').innerHTML=`<span class="err">${esc(r.error)}</span>`;return}
+      $('tl-pop').innerHTML=`<span class="okc">Making the clip. It appears below when it's ready.</span>`;clipSig='';openSession(id,true)}});
+}
+function tlSvg(t){
+  const W=1000,H=110,base=H,dur=t.duration,bw=W/t.bins.length,max=Math.max(4,...t.bins);
+  const x=s=>(s/dur*W).toFixed(1);
+  const bars=t.bins.map((n,i)=>n?`<rect class="bar" x="${(i*bw).toFixed(1)}" y="${(base-n/max*(H-24)).toFixed(1)}" width="${Math.max(1,bw-1).toFixed(1)}" height="${(n/max*(H-24)).toFixed(1)}"/>`:'').join('');
+  const bands=t.clips.map(c=>`<rect class="band${c.failed?' failed':''}${c.kind==='manual'?' manual':''}" x="${x(c.start+t.delay)}" y="14" width="${Math.max(2,c.length/dur*W).toFixed(1)}" height="${H-14}"><title>${esc(clipTime(c.name))}${c.failed?' (failed)':''}</title></rect>`).join('');
+  const mks=t.moments.map(m=>`<path class="mk${m.requests?' req':''}" d="M${x(m.onset)} 12 l-5 -9 h10 z"><title>${hms(m.onset)}${m.requests?`, clip request ×${m.requests}`:''}, score ${m.score}</title></path>`).join('');
+  const ticks=[0,.25,.5,.75,1].map(f=>`<text class="axis" x="${f===1?W-2:f*W+2}" y="${H+16}" text-anchor="${f===1?'end':'start'}">${hms(f*dur)}</text>`).join('');
+  return `<svg class="tl" viewBox="0 0 ${W} ${H+20}" preserveAspectRatio="none" role="img" aria-label="Chat activity over the stream with moments and clips">${bars}${bands}${mks}
+    <line class="hover" x1="0" x2="0" y1="0" y2="${H}" style="display:none"/><text class="axis hovert" x="0" y="11"></text>${ticks}</svg>`;
 }
 
 // ---------- review (all clips across sessions)

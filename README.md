@@ -28,6 +28,7 @@ Add `--service` to either one to also start the dashboard automatically (systemd
   - Channels become chips, so you can add the same streamer's Twitch and Kick too and their chat is combined. The first chip records the video; click **Use for video** on another to switch.
   - A bare name asks which platform it's on.
   - Things that can't be clipped are explained, for example Twitch clips, and past Kick videos because Kick doesn't keep their chat.
+  - **Edit** on a watch job opens the same box, prefilled, so you can change its channels, which one records the video, or its name. A running job picks up the change from its next stream.
 - **Jobs:** each job runs on its own, and as many as you like can run at once.
   - **Watch channels:** fill in the YouTube, Twitch and Kick names (any of them) and pick which one to record video from. The job waits for the stream to go live, records it and its chat, makes the clips, then waits for the next stream.
   - **One link:** a live or upcoming stream gets recorded until it ends, then clipped. A finished YouTube or Twitch video gets downloaded with its chat replay, then clipped.
@@ -43,6 +44,12 @@ Add `--service` to either one to also start the dashboard automatically (systemd
 - **Needs attention:** one strip at the top of every tab, listing failed jobs, YouTube blocking a recorder, failed clips, a missing or full drive, missing tools and folders the dashboard can't write to. Each item has the button that fixes it (Fix clips, Upload cookies, How to fix…).
 - **Sessions:** every recording with its length, chat, chatters, spikes, clips and size.
   - Open a session to play or download each clip, its raw cut and its captions, or to list spikes with the current settings.
+  - **Timeline:** the whole stream's chat as bars, with moments marked (teal = clip request) and clips as bands (dashed = made by hand, red = failed).
+    - Click a clip to jump to it and play it.
+    - Click anywhere else to **make a clip there**. The confirmation says where it starts and how long it runs, and it's cut with the current settings.
+    - This is for moments detection missed, for example during the first minute, while chat is still building its baseline.
+    - A clip made by hand at a spot you deleted brings it back. Clicking a spot that already has a clip doesn't duplicate it.
+  - The main actions sit on the page (Fix failed clips, Re-make clips, Add clip-request clips). The rarer ones are under **More**: list moments, move, delete recording, delete session.
   - **Re-make clips** redoes the session with the current settings.
     - A moment whose clip start is within half a clip length of an existing clip **overwrites that clip**. It keeps the same number, and the folder is renamed if the start moved.
     - New moments become new clips.

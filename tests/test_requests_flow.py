@@ -153,5 +153,38 @@ class RemakeFollowsSettings(AddRequestClips):
         self.assertEqual(len(self.names()), 3)
 
 
+class TimelineAndManual(AddRequestClips):
+    def test_add_only_keeps_existing_and_is_idempotent(self):  # covered by the parent class
+        pass
+
+    def test_timeline_and_clip_here(self):
+        clipper.cmd_process(self.s)                                    # spike clip (requests off)
+        t = clipper.session_timeline(self.s, clipper.load_cfg())
+        self.assertGreaterEqual(t["duration"], 239)
+        self.assertEqual(sum(t["bins"]), sum(1 for _ in open(self.s / "chat_youtube.tsv")))
+        self.assertGreater(max(t["bins"]), t["bins"][0])               # the burst stands out
+        self.assertEqual(len(t["clips"]), 1)
+        self.assertTrue(t["moments"])
+
+        clipper.cmd_process(self.s, manual_at=200.0)                   # "make a clip here"
+        names = [f.name for _, _, f in clipper.clip_folders(self.s)]
+        self.assertEqual(len(names), 2, names)
+        manual = self.s / "clips" / names[1]
+        self.assertAlmostEqual(clipper.clip_folder_start(names[1]), 200 - 0 - 2, delta=0.01)  # minus delay + lead
+        mom = json.loads((manual / "moment.json").read_text())
+        self.assertEqual(mom["kind"], "manual")
+        self.assertTrue((manual / "captioned.mp4").exists())
+
+        clipper.cmd_process(self.s, manual_at=201.0)                   # same spot again → no duplicate
+        self.assertEqual(len(clipper.clip_folders(self.s)), 2)
+
+        clipper.delete_clip(self.s, names[1])                          # deleted, then clicked again → back
+        clipper.cmd_process(self.s, manual_at=200.0)
+        self.assertEqual(len(clipper.clip_folders(self.s)), 2)
+        self.assertEqual(clipper.deleted_starts(self.s), [])
+        tl = clipper.session_timeline(self.s, clipper.load_cfg())
+        self.assertIn("manual", [c["kind"] for c in tl["clips"]])
+
+
 if __name__ == "__main__":
     unittest.main()

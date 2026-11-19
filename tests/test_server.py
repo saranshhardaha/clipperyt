@@ -194,6 +194,25 @@ class Api(unittest.TestCase):
         call(p, f"/api/sessions/{sess.name}/clips/01_00-00-10/review", {"state": "new"})
         self.assertEqual(call(p, "/api/clips?channel=revchan")[1]["counts"]["new"], 2)
 
+    def test_edit_watch_job(self):
+        p = self.port
+        code, r = call(p, "/api/jobs", {"kind": "watch", "channels": {"youtube": "Edity"}, "start": False})
+        jid = r["job"]["id"]
+        code, r = call(p, f"/api/jobs/{jid}/edit", {"channels": {"youtube": "Edity", "twitch": "edity_tv"},
+                                                     "record_from": "twitch", "name": "Edity both"})
+        self.assertEqual(code, 200, r)
+        job = clipper.load_job(jid)
+        self.assertEqual((job["channels"], job["record_from"], job["name"]),
+                         ({"youtube": "Edity", "twitch": "edity_tv"}, "twitch", "Edity both"))
+        self.assertEqual(call(p, f"/api/jobs/{jid}/edit", {"channels": {}})[0], 400)
+        code, u = call(p, "/api/jobs", {"kind": "url", "url": "https://youtu.be/abcdefghijk", "start": False})
+        self.assertEqual(call(p, f"/api/jobs/{u['job']['id']}/edit", {"channels": {"twitch": "x"}})[0], 400)
+        for x in (jid, u["job"]["id"]):
+            call(p, f"/api/jobs/{x}/delete", {})
+
+    def test_clip_at_validation(self):
+        self.assertEqual(call(self.port, "/api/sessions/20990101-0000-nope/clip-at", {"at": 5})[0], 404)
+
     def test_files_no_traversal(self):
         self.assertEqual(call(self.port, "/files/../config.toml")[0], 404)
 

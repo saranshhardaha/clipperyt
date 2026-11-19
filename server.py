@@ -128,11 +128,17 @@ def create_job(data: dict) -> tuple[dict | None, str | None]:
         if not SESSION_RE.match(sid) or not clipper.find_session(sid):
             return None, "no such session"
         job["session"] = sid
-        if data.get("mode") in ("requests", "redo"):
+        if data.get("mode") in ("requests", "redo", "manual"):
             job["mode"] = data["mode"]
+        if job.get("mode") == "manual":
+            try:
+                job["at"] = max(0.0, float(data.get("at")))
+            except (TypeError, ValueError):
+                return None, "pick a time on the timeline"
         if job.get("mode") == "redo":
             job["clips"] = [c for c in (data.get("clips") or []) if clipper.CLIP_RE.match(str(c))]
-        label = {"requests": "clip requests", "redo": "fix clips"}.get(job.get("mode"), "re-clip")
+        label = {"requests": "clip requests", "redo": "fix clips",
+                 "manual": f"clip at {clipper.spikes.fmt(job.get('at', 0))}"}.get(job.get("mode"), "re-clip")
         name = data.get("name") or f"{label} {sid}"
     else:
         return None, "kind must be watch, url or process"
@@ -666,6 +672,10 @@ class H(BaseHTTPRequestHandler):
             if self.session_or_404(m[1]):
                 self.send(200, session_detail(m[1]))
             return
+        if m := re.fullmatch(r"/api/sessions/([\w-]+)/timeline", path):
+            if self.session_or_404(m[1]):
+                self.send(200, clipper.session_timeline(clipper.find_session(m[1]), clipper.load_cfg()))
+            return
         if m := re.fullmatch(r"/api/sessions/([\w-]+)/spikes", path):
             if self.session_or_404(m[1]):
                 try:
@@ -701,6 +711,24 @@ class H(BaseHTTPRequestHandler):
                     delete_job(j["id"])
                     n += 1
             return self.send(200, {"result": f"cleared {n} job{'s' if n != 1 else ''}"})
+        if m := re.fullmatch(r"/api/jobs/([\w-]+)/edit", path):
+            jid = m[1]
+            if jid == "cli" or not self.job_or_404(jid):
+                return self.send(400, {"error": "can't edit a terminal run"}) if jid == "cli" else None
+            job = clipper.load_job(jid)
+            if job["kind"] != "watch":
+                return self.send(400, {"error": "only channel-watching jobs can be edited"})
+            chans = {p: str(c).strip().lstrip("@") for p, c in (data.get("channels") or {}).items()
+                     if p in clipper.NAMES and str(c or "").strip()}
+            if not chans:
+                return self.send(400, {"error": "add at least one channel"})
+            rf = data.get("record_from")
+            job.update(channels=chans, record_from=rf if rf in chans else next(iter(chans)))
+            if str(data.get("name") or "").strip():
+                job["name"] = str(data["name"]).strip()[:60]
+            clipper.save_job(job)
+            running = is_running(job_state(jid))
+            return self.send(200, {"job": job, "result": "saved — applies from the next stream" if running else "saved"})
         if m := re.fullmatch(r"/api/jobs/([\w-]+)/(start|stop|kill|delete|autostart)", path):
             jid, act = m[1], m[2]
             if not self.job_or_404(jid):
@@ -762,6 +790,16 @@ class H(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self.send(404, {"error": str(e)})
             return self.send(200, {"result": f"deleted {name}"})
+        if m := re.fullmatch(r"/api/sessions/([\w-]+)/clip-at", path):
+            sid = m[1]
+            if not self.session_or_404(sid):
+                return
+            if sid in busy_sessions():
+                return self.send(400, {"error": "a job is using this session — try again when it's done"})
+            job, err = create_job({"kind": "process", "session": sid, "mode": "manual", "at": data.get("at")})
+            if err:
+                return self.send(400, {"error": err})
+            return self.send(200, {"result": start_job(job["id"]), "job": job})
         if m := re.fullmatch(r"/api/sessions/([\w-]+)/(process|requests|redo|delete-source|delete|move)", path):
             sid, act = m[1], m[2]
             if not self.session_or_404(sid):

@@ -61,6 +61,11 @@ Records a YouTube / Twitch / Kick live stream and its chat with no accounts or A
   - Keep auto-fetches titles when a key is set.
 - Add box (Phase 2): `clipper.parse_target(text)` → `watch` / `url` / `ask` (bare name) / `error`, served by `/api/parse`. The New job panel is one input plus channel chips (one per platform; `record_from` is the chip marked "records video").
   - YouTube `/channel/UC…` ids work: `stream_url()` and `chat_youtube.video_id()` use `/channel/<id>/live`.
+- Edit job: `POST /api/jobs/<id>/edit` (watch jobs: channels / record_from / name). `cmd_watch` re-reads `job.json` each loop, so a running job applies the change from its next stream.
+- Timeline + manual clips (Phase 3): `session_timeline()` / `/api/sessions/<id>/timeline` gives up to about 360 chat bins plus moments and clips, in chat time; clips are drawn at start + delay.
+  - `POST …/clip-at {at}` starts a `process` job with mode `manual`. `_manual_clip()` builds a `kind="manual"` Moment at `at`, so the clip starts at at − delay − lead.
+  - That clip goes through `_add_clips` (no duplicates) and clears a matching `.deleted_clips` entry.
+  - For a past video without a known length, the duration comes from ffprobe.
 - Needs attention: `attention()` / `/api/attention` collects failed jobs, recorder errors (bot check → cookies), failed clips (with a redo POST action), missing or full drives, missing tools and write problems. It also returns `new_clips` for the tab badge. The strip is shown on every tab.
 
 ## Timing rules (don't break)
@@ -73,7 +78,7 @@ Records a YouTube / Twitch / Kick live stream and its chat with no accounts or A
 ## Conventions
 - Don't call any LLM at runtime. Overnight runs must be free and offline-capable.
   - The one exception is `titles.py`: OpenRouter chat completions, default model `x-ai/grok-4.7`, sending only an `X-Title: clipperyt` header and no referer. It runs only when the user presses "Titles" on a clip and is never called from jobs. It's cached in `clips/<clip>/titles.json` with the cost. The description's credit and link are written by us, not the model. `/api/titles/models` serves the model picker.
-- UX roadmap: `docs/superpowers/specs/2026-11-19-ux-plan.md` (review inbox, needs-attention strip, smart add box, session timeline with manual clips, settings reorganisation).
+- UX roadmap: `docs/superpowers/specs/2026-11-19-ux-plan.md` (phases 1–3 built: review inbox + needs-attention, smart add box + edit, session timeline + manual clips; next: settings reorganisation, polish).
 - Keep the streamer credit (burned-in line + clips.md links).
 - Test offline with fakes: a synthetic `stream.ts` (ffmpeg testsrc2), synthetic chat TSV + meta.json, and a fake `streamlink`/`yt-dlp` on PATH. YouTube can't be reached from the sandbox that wrote this.
 
