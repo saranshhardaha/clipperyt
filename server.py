@@ -147,7 +147,34 @@ def delete_job(jid: str) -> str:
     return "deleted"
 
 
+def prune_done() -> None:
+    """Finished one-link and fix/re-clip jobs leave the list by themselves. Their sessions and
+    clips stay, and the job's log is appended to the session's job.log. Failed jobs stay."""
+    for f in JOBS.glob("*/job.json") if JOBS.exists() else []:
+        try:
+            job = json.loads(f.read_text())
+        except Exception:
+            continue
+        if job.get("kind") not in ("url", "process"):
+            continue
+        st = clipper.read_state(f.parent / "state.json")
+        if st.get("status") != "done" or clipper.pid_alive(st.get("pid")):
+            continue
+        sid = st.get("session") or job.get("session")
+        sess = clipper.find_session(sid) if sid else None
+        log = f.parent / "job.log"
+        if sess and log.exists():
+            try:
+                with open(sess / "job.log", "a", encoding="utf-8") as out:
+                    out.write(f"\n===== {job.get('name', job['id'])} ({job['id']}) =====\n")
+                    out.write(log.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                continue  # can't save the log (drive gone?) → keep the job for now
+        shutil.rmtree(f.parent, ignore_errors=True)
+
+
 def all_jobs() -> list[dict]:
+    prune_done()
     out = []
     for f in sorted(JOBS.glob("*/job.json")) if JOBS.exists() else []:
         try:
@@ -585,13 +612,13 @@ class H(BaseHTTPRequestHandler):
                 return self.send(400, {"error": err})
             result = start_job(job["id"]) if data.get("start", True) else "saved"
             return self.send(200, {"job": job, "result": result})
-        if path == "/api/jobs/clear-finished":
+        if path == "/api/jobs/clear-finished":  # done ones leave by themselves; this clears failed/stopped links
             n = 0
             for j in all_jobs():
                 if j["kind"] in ("url", "process") and not j["running"] and j["state"].get("status") in clipper.FINAL:
                     delete_job(j["id"])
                     n += 1
-            return self.send(200, {"result": f"cleared {n}"})
+            return self.send(200, {"result": f"cleared {n} job{'s' if n != 1 else ''}"})
         if m := re.fullmatch(r"/api/jobs/([\w-]+)/(start|stop|kill|delete|autostart)", path):
             jid, act = m[1], m[2]
             if not self.job_or_404(jid):

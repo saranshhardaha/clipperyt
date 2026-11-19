@@ -25,6 +25,7 @@ Records a YouTube / Twitch / Kick live stream and its chat with no accounts or A
 - `server.py`: stdlib dashboard and JSON API on :8787 (`CLIPPER_TOKEN`).
   - It starts each job detached (`start_new_session`, plus `caffeinate -is` on macOS), and jobs survive dashboard restarts. Jobs with `autostart` start on boot.
   - Routes: `/api/jobs`, `/api/sessions`, `/api/settings` and `/api/system`.
+  - `prune_done()` (run on every job listing) removes `url`/`process` jobs that finished as `done`, after appending their log to the session's `job.log`. Failed jobs stay until "Clear failed".
 - Layout: `<recordings>/<channel-slug>/<session-id>/`, where the id is unique across all folders. Flat `<root>/<id>` sessions from before still work (`iter_sessions`, `find_session`), and the dashboard tags them UNSORTED; a move files them under their channel.
 - Signals: `graceful_signals()` re-enables SIGINT. A dashboard started in the background passes SIG_IGN down, and then "Stop" silently did nothing.
 - `update.sh`: git pull --ff-only, pip, reload the dashboard (systemd / LaunchAgent / manual), restart jobs that are only `waiting`, then `doctor`. `--upgrade-tools` runs brew upgrade on macOS. It's bash 3.2-safe.

@@ -151,6 +151,22 @@ class Api(unittest.TestCase):
         self.assertFalse(call(p, "/api/cookies/remove", {})[1]["cookies"]["set"])
         self.assertFalse(f.exists())
 
+    def test_done_jobs_leave_the_list(self):
+        sess = clipper.channel_dir(clipper.SESSIONS, "donechan") / "20990107-0000-donechan"
+        sess.mkdir(parents=True)
+        (sess / "meta.json").write_text("{}")
+        for jid, status in (("done-1", "done"), ("fail-1", "failed")):
+            clipper.save_job({"id": jid, "kind": "url", "name": jid, "url": "https://youtu.be/x"})
+            d = clipper.job_dir(jid)
+            (d / "state.json").write_text(json.dumps({"status": status, "pid": 999999, "session": sess.name}))
+            (d / "job.log").write_text(f"log of {jid}\n")
+        ids = [j["id"] for j in call(self.port, "/api/jobs")[1]]
+        self.assertNotIn("done-1", ids)
+        self.assertIn("fail-1", ids)
+        self.assertFalse(clipper.job_dir("done-1").exists())
+        self.assertIn("log of done-1", (sess / "job.log").read_text())
+        call(self.port, "/api/jobs/fail-1/delete", {})
+
     def test_files_no_traversal(self):
         self.assertEqual(call(self.port, "/files/../config.toml")[0], 404)
 

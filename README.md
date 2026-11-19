@@ -29,6 +29,7 @@ Add `--service` to either one to also start the dashboard automatically (systemd
   - Each job card shows live stats: time recorded, GB, bitrate, chat per minute with a 30-minute sparkline, messages per platform, unique chatters, and moments found so far. It also shows clipping progress and the job's log.
   - Tick **autostart** and the job starts again whenever the dashboard starts, for example after a reboot.
   - **Stop** still clips what was recorded. **Kill** stops at once, without clipping.
+  - Finished one-link and fix/re-clip jobs leave the list by themselves. The session keeps the clips, and the job's log is added to the session's `job.log`. Failed ones stay until you press **Clear failed**.
 - **Clips:** every finished clip from every session in one grid, newest first or by score. You can filter by channel or show only clip requests. Each clip can be played, downloaded (short or raw), and opened in its session.
 - **Sessions:** every recording with its length, chat, chatters, spikes, clips and size.
   - Open a session to play or download each clip, its raw cut and its captions, or to list spikes with the current settings.

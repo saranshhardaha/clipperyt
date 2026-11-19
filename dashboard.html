@@ -169,7 +169,7 @@ tr.click{cursor:pointer}tr.click:hover td{background:var(--panel2)}
 <div id="v-jobs">
   <div id="permwarn"></div>
   <div class="jhead"><h2>Jobs</h2>
-    <button class="sm quiet" id="clear" title="Remove finished and failed one-link and re-clip jobs (their sessions and clips stay)">Clear finished</button>
+    <button class="sm quiet" id="clear" hidden title="Remove failed or stopped one-link and fix/re-clip jobs. Their sessions and clips stay.">Clear failed</button>
     <button class="sm pri" id="newbtn" aria-expanded="false">New job</button></div>
   <div class="card newjob" id="newjob" hidden>
     <div class="row between"><div class="seg" id="kind"><button data-k="watch" class="on">Watch channels</button><button data-k="url">One link</button></div>
@@ -335,7 +335,8 @@ function jobCard(jb){
 }
 // Cards never move: fixed sections by job type, A–Z by name inside. Status chips only filter.
 const SECTIONS=[['watch','Watching channels','Record every stream from these channels, clip it, then wait for the next one.'],
-  ['url','One links','A single stream or past video.'],['process','Fix and re-clip','Work on sessions that were already recorded.'],
+  ['url','One links','A single stream or past video. Removed from this list when done; the session keeps the clips.'],
+  ['process','Fix and re-clip','Work on sessions that were already recorded. Removed from this list when done.'],
   ['cli','Terminal runs','Started with clipper.py in a terminal.']];
 const BUCKETS=[['live','On air',['live']],['clipping','Clipping',['processing','queued','idle']],['downloading','Downloading',['downloading']],
   ['waiting','Waiting',['waiting','starting']],['failed','Failed',['failed']],['done','Done',['done']],['stopped','Stopped',['stopped']]];
@@ -367,6 +368,7 @@ async function refreshJobs(){
   $('chips').innerHTML=`<span class="chip${live?' air':''}"><b>${live}</b> on air</span><span class="chip"><b>${run}</b> running</span>`
     +(d0?`<span class="chip" title="${esc(d0.path)}">${d0.missing?'<b class="err">Recordings drive missing</b>':`<b>${d0.free_gb} GB</b> free`}</span>`:'');
   renderFilters(js);
+  $('clear').hidden=!js.some(x=>(x.kind==='url'||x.kind==='process')&&!x.running&&['failed','stopped'].includes(x.state.status));
   const sig=JSON.stringify(js)+[...openLogs].join()+jfilter;
   if(sig!==jobsSig){
     jobsSig=sig;

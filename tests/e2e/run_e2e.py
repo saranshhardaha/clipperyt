@@ -132,11 +132,14 @@ def main():
             s = states()
             ok = all(s[ids[k]]["state"]["status"] == "waiting" and (sess_dir(ss) / "clips.md").exists()
                      for k, ss in (("a", sa), ("b", sb)))
-            return ok and all(s[ids[k]]["state"]["status"] == "done" for k in "vl") and s
+            # finished one-link jobs leave the list by themselves; their sessions keep the clips + log
+            gone = all(ids[k] not in s for k in "vl")
+            return ok and gone and all(next(iter((HOMEDIR / "sessions" / ch).glob("*/clips.md")), None)
+                                       for ch in ("vodguy", "liveguy")) and s
         s = wait(finished, SECONDS + 300, "both streams clipped + vod done + live link done")
 
-        vs = s[ids["v"]]["state"]["session"]
-        ls = s[ids["l"]]["state"]["session"]
+        vs = next((HOMEDIR / "sessions" / "vodguy").glob("*-vod")).name
+        ls = next((HOMEDIR / "sessions" / "liveguy").glob("*-liveguy")).name
         assert vs.endswith("-vodguy-vod"), vs
         assert ls and ls.endswith("-liveguy"), ls
         for ss in (sa, sb, vs, ls):
@@ -149,7 +152,9 @@ def main():
             assert "Credit the streamer" in md and "http" in md, md
             print(f"{ss}: {len(shorts)} clips", flush=True)
 
-        logs = "".join((HOMEDIR / "jobs" / ids[k] / "job.log").read_text() for k in "abvl")
+        logs = "".join((HOMEDIR / "jobs" / ids[k] / "job.log").read_text() for k in "ab")
+        logs += "".join((sess_dir(x) / "job.log").read_text() for x in (vs, ls))  # moved there when done
+        assert not (HOMEDIR / "jobs" / ids["v"]).exists(), "done job should leave the list"
         assert "waiting for a free clipping slot" in logs, "processing was not serialized"
         print("processing slots: serialized ✓", flush=True)
 
