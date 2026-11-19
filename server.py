@@ -305,6 +305,7 @@ def session_detail(sid: str) -> dict:
             "srt": f"/files/{sid}/clips/{c.name}/speech.srt" if (c / "speech.srt").exists() else None,
             "score": m.get("score"), "messages": m.get("messages"), "top": m.get("top", []),
             "requests": m.get("requests", 0), "kind": m.get("kind", "spike"), "failed": not final,
+            "review": review.get(c),
             "titles": titles.cached(c),
         })
     try:
@@ -512,7 +513,32 @@ def get_settings() -> dict:
     text = clipper.CONFIG.read_text(encoding="utf-8")
     raw = tomllib.loads(text)
     return {"schema": settings_schema.SCHEMA, "sections": settings_schema.SECTION_TITLES,
+            "groups": settings_schema.GROUPS, "defaults": settings_schema.defaults(),
             "values": settings_schema.flatten(raw), "toml": text, "cookies": cookie_status()}
+
+
+def settings_preview(values: dict, sid: str = "") -> tuple[int, dict]:
+    """What detection settings (not saved yet) would find on a session, next to the saved ones."""
+    raw = tomllib.loads(clipper.CONFIG.read_text(encoding="utf-8"))
+    errors = settings_schema.apply_values(raw, {k: v for k, v in values.items() if k.startswith(("spikes.", "clip."))})
+    if errors:
+        return 400, {"error": "; ".join(errors)}
+    d = clipper.find_session(sid) if sid else None
+    if d is None:  # newest session that has chat
+        d = next((x for x in all_session_dirs() if any(x.glob("chat*.tsv"))), None)
+    if d is None:
+        return 200, {"session": None}
+    meta, chat = clipper._session_chat(d)
+    rec = meta.get("rec_start_ms", 0)
+    new_cfg = {"spikes": raw.get("spikes", {}), "clip": raw.get("clip", {})}
+    found = clipper.spikes.find_all(chat, rec, new_cfg["spikes"]) if chat else []
+    kept = clipper.session_moments(d, new_cfg) if chat else []
+    saved = clipper.session_moments(d, clipper.load_cfg()) if chat else []
+    return 200, {"session": d.name, "channel": meta.get("channel"), "moments": len(kept), "found": len(found),
+                 "requests": sum(1 for m in kept if m.requests), "saved": len(saved),
+                 "clips": len(clipper.clip_folders(d)),
+                 "list": [{"at": clipper.spikes.fmt(m.onset), "score": m.score, "requests": m.requests,
+                           "kind": m.kind} for m in kept[:12]]}
 
 
 def write_config(text: str) -> None:
@@ -822,6 +848,9 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"result": delete_session(sid, act == "delete-source")})
         if path == "/api/settings":
             code, body = save_settings(data.get("values") or {})
+            return self.send(code, body)
+        if path == "/api/settings/preview":
+            code, body = settings_preview(data.get("values") or {}, str(data.get("session") or ""))
             return self.send(code, body)
         if path == "/api/cookies":
             code, body = save_cookies(str(data.get("text") or ""))

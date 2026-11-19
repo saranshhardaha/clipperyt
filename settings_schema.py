@@ -131,6 +131,39 @@ SCHEMA: list[dict] = [
      "help": "How many streams can be cut + transcribed + rendered at the same time. 1 is safest for whisper."},
 ]
 
+# How the Settings page groups fields (what people change first), and which are "advanced"
+GROUPS = [
+    ("detection", "Detection", "What counts as a moment worth clipping."),
+    ("clips", "Clips & captions", "Where clips start, how long they are, and their captions."),
+    ("output", "Output", "The shape and look of the finished Shorts."),
+    ("titles", "Titles (AI)", "Title suggestions through OpenRouter, only when you press Titles on a clip."),
+    ("channels", "Channels & recording", "Default channels, YouTube cookies, and how streams are recorded."),
+    ("storage", "Storage & limits", "Where recordings go and how much runs at once."),
+    ("file", "Config file", "Edit config.toml directly."),
+]
+GROUP_OF = {"spikes": "detection", "clip": "clips", "captions": "clips", "render": "output", "titles": "titles",
+            "stream": "channels", "storage": "storage", "limits": "storage"}
+ADVANCED = {"spikes.bucket_seconds", "spikes.baseline_seconds", "spikes.warmup_seconds", "spikes.merge_seconds",
+            "spikes.hype_weight", "spikes.clip_boost", "captions.whisper_bin", "captions.model", "render.encoder",
+            "render.font", "stream.options.quality", "stream.options.retry_seconds", "stream.options.kick_chatroom_id",
+            "stream.options.cookies_from_browser", "stream.options.twitch_oauth_token", "storage.also_scan",
+            "storage.wait_for_drive_seconds", "stream.record_from"}
+for _f in SCHEMA:
+    _f["group"] = GROUP_OF[_f["key"].split(".")[0]]
+    _f["adv"] = _f["key"] in ADVANCED
+
+
+def defaults() -> dict:
+    """Schema key → value shipped in config.example.toml (for "changed from default" + Reset)."""
+    from pathlib import Path
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        import tomli as tomllib
+    raw = tomllib.loads((Path(__file__).resolve().parent / "config.example.toml").read_text(encoding="utf-8"))
+    return {f["key"]: get_path(raw, f["key"]) for f in SCHEMA}
+
+
 SECTION_TITLES = {"stream": "Stream defaults", "spikes": "Spike detection", "clip": "Clips",
                   "captions": "Captions", "render": "Render", "storage": "Storage", "titles": "Titles (AI)", "limits": "Limits"}
 BY_KEY = {f["key"]: f for f in SCHEMA}

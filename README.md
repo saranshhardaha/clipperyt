@@ -37,7 +37,7 @@ Add `--service` to either one to also start the dashboard automatically (systemd
   - **Stop** still clips what was recorded. **Kill** stops at once, without clipping.
   - Finished one-link and fix/re-clip jobs leave the list by themselves. The session keeps the clips, and the job's log is added to the session's `job.log`. Failed ones stay until you press **Clear failed**.
 - **Review:** your morning inbox. The dashboard opens here when there are new clips and nothing is on air, and the tab shows how many are new.
-  - **One by one:** a big vertical player. Pick an AI title or type one, copy the title and description, then **Skip**, **Download** or **Keep**; later, **Mark posted**.
+  - **One by one:** a big vertical player. Pick an AI title or type one, copy the title and description, then **Skip**, **Download** or **Keep**. **Mark posted** works on any clip, in the grid and on the session page too.
   - Keys on a computer: ← → move, K keep, S skip, D download, P posted, Space play. On a phone, swipe left or right on the video. Every change has **Undo**.
   - Pressing **Keep** fetches AI titles if you've added an OpenRouter key, so you don't pay for clips you skip.
   - The New, Kept, Posted and Skipped filters are saved per clip (`review.json`), so they're the same on every device. **Grid** shows all clips at once.
@@ -60,7 +60,11 @@ Add `--service` to either one to also start the dashboard automatically (systemd
   - **Delete** (also on the Clips tab) removes a clip and its clips.md row. Deleted clips aren't re-added by "Add clip-request clips".
   - CLI: `clipper.py redo <session> [clip…]`. With no clip names it redoes every failed clip.
   - **Free disk** deletes the full recording but keeps the clips.
-- **Settings:** every option in `config.toml` as a form, with help text. **Advanced** is the raw TOML editor. Saved settings apply to each job's next stream or clip run.
+- **Settings:** grouped into **Detection · Clips & captions · Output · Titles (AI) · Channels & recording · Storage & limits · Config file** (a dropdown on a phone).
+  - Each section shows the settings you actually change. Technical ones (bucket and baseline seconds, whisper paths, encoder, quality…) are under **Advanced** inside it.
+  - Settings that differ from the default get a dot and a **Reset**, and so does their section in the list.
+  - **Detection preview:** while you edit detection settings, it shows what they'd find on a session you pick, for example "2 clips with these settings (+1 vs saved)", with the times. Nothing is saved or re-made until you save.
+  - **Config file** edits `config.toml` directly. Saved settings apply to each job's next stream or clip run.
 - **System:** free disk, totals, CPU load, the encoder in use, and which tools are installed (ffmpeg plus libass, streamlink, yt-dlp, whisper, the model).
 
 Clipping (cut, then whisper, then render) is heavy, so only `Clip jobs at once` streams get clipped at the same time (Settings → Limits, default 1). Others wait in line as `queued`. Recording is never limited.

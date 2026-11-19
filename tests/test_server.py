@@ -213,6 +213,31 @@ class Api(unittest.TestCase):
     def test_clip_at_validation(self):
         self.assertEqual(call(self.port, "/api/sessions/20990101-0000-nope/clip-at", {"at": 5})[0], 404)
 
+    def test_settings_groups_defaults_and_preview(self):
+        p = self.port
+        st = call(p, "/api/settings")[1]
+        self.assertEqual([g[0] for g in st["groups"]][:2], ["detection", "clips"])
+        f = {x["key"]: x for x in st["schema"]}
+        self.assertEqual((f["spikes.multiplier"]["group"], f["spikes.multiplier"]["adv"]), ("detection", False))
+        self.assertTrue(f["spikes.bucket_seconds"]["adv"])
+        self.assertEqual(st["defaults"]["spikes.multiplier"], 3.0)
+        sess = clipper.channel_dir(clipper.SESSIONS, "prevchan") / "20990112-0000-prevchan"
+        sess.mkdir(parents=True)
+        (sess / "meta.json").write_text(json.dumps({"channel": "prevchan", "platform": "twitch", "rec_start_ms": 0}))
+        rows = [(t * 1000, f"u{t % 9}", "ok") for t in range(0, 600, 4)]
+        rows += [(300_000 + i * 150, f"h{i}", "OMG") for i in range(60)]
+        (sess / "chat_twitch.tsv").write_text("".join(f"{t}\t{a}\t{x}\n" for t, a, x in sorted(rows)))
+        before = clipper.CONFIG.read_text()
+        loose = call(p, "/api/settings/preview", {"values": {"spikes.multiplier": "2", "spikes.warmup_seconds": "0"},
+                                                  "session": sess.name})[1]
+        strict = call(p, "/api/settings/preview", {"values": {"spikes.multiplier": "50", "spikes.warmup_seconds": "0"},
+                                                   "session": sess.name})[1]
+        self.assertEqual(loose["session"], sess.name)
+        self.assertGreaterEqual(loose["moments"], 1)
+        self.assertEqual(strict["moments"], 0)
+        self.assertEqual(clipper.CONFIG.read_text(), before)            # preview never saves
+        self.assertEqual(call(p, "/api/settings/preview", {"values": {"spikes.multiplier": "x"}})[0], 400)
+
     def test_files_no_traversal(self):
         self.assertEqual(call(self.port, "/files/../config.toml")[0], 404)
 
