@@ -29,9 +29,11 @@ Add `--service` to either one to also start the dashboard automatically (systemd
   - Each job card shows live stats: time recorded, GB, bitrate, chat per minute with a 30-minute sparkline, messages per platform, unique chatters, and moments found so far. It also shows clipping progress and the job's log.
   - Tick **autostart** and the job starts again whenever the dashboard starts, for example after a reboot.
   - **Stop** still clips what was recorded. **Kill** stops at once, without clipping.
+- **Clips:** every finished clip from every session in one grid, newest first or by score. You can filter by channel or show only clip requests. Each clip can be played, downloaded (short or raw), and opened in its session.
 - **Sessions:** every recording with its length, chat, chatters, spikes, clips and size.
   - Open a session to play or download each clip, its raw cut and its captions, or to list spikes with the current settings.
   - **Re-make clips** after you change the settings.
+  - **Add clip-request clips** finds moments where 3 or more chatters asked for a clip and cuts only the ones without a clip yet. Existing clips stay.
   - **Free disk** deletes the full recording but keeps the clips.
 - **Settings:** every option in `config.toml` as a form, with help text. **Advanced** is the raw TOML editor. Saved settings apply to each job's next stream or clip run.
 - **System:** free disk, totals, CPU load, the encoder in use, and which tools are installed (ffmpeg plus libass, streamlink, yt-dlp, whisper, the model).
@@ -64,6 +66,7 @@ Set **Recordings folder** to a folder on the bigger drive, e.g. `/Volumes/BigDri
 - **Moving old sessions:** sessions already in the old folder stay listed and are marked **OLD FOLDER**. Move them with **Move N to recordings folder** (on the Sessions page), or with **Move to recordings folder** inside a session.
   - On another drive, files are copied, checked, and only then deleted from the old place. On the same drive the move is instant.
   - Sessions being recorded or clipped are skipped.
+- **After a reboot:** autostart jobs and One-link jobs wait up to `wait_for_drive_seconds` (default 300) for the recordings folder, because NAS and USB drives often mount after the dashboard starts. The systemd service also waits for mounts.
 - **Drive not connected:** jobs never fall back to the internal disk. A watch job shows "is the drive connected?" and retries, and starts recording on the drive as soon as it's back. The System tab shows each drive's free space and flags a missing one.
 - **Linux mount points:** create the folder on the mounted drive once, from Settings or with `mkdir`. When the drive isn't mounted, that folder is missing, so the app knows not to record there.
 
@@ -115,6 +118,23 @@ When you wake up, open `sessions/<date>/clips.md`. It lists every clip with its 
 | `raw.mp4` | the original 45 s cut with no edits |
 | `speech.srt` | the whisper transcript, to fix typos and re-render |
 | `chat.txt` | the most repeated chat messages at that moment |
+
+## Clip requests
+
+A moment also fires when at least 3 *different* chatters type a clip phrase within 20 s, even if chat isn't louder than usual.
+- Phrases: `clip`, `clip it`, `clip that`, `clipped`, `clip karo`, `!clip`…
+- Each chatter counts once. Matches are whole words, so "eclipse" and "clips" don't count.
+- If a chat spike happens at the same moment, the request boosts that spike's score. Otherwise it becomes a moment of its own.
+- Either way the clip is tagged **CLIP REQUEST ×N** in the dashboard and **clip requested ×N** in clips.md.
+- Settings → Spike detection has the switch, phrases, number of chatters, time window and boost.
+- `clipper.py requests <session>` does the same as the **Add clip-request clips** button.
+
+## Long streams: clipping while live
+
+Every `process_every_minutes` (default 60) during a recording, a background pass clips the newest part. Recording keeps going while it runs.
+- When the stream ends, only the part not clipped yet is processed, so nothing is clipped twice.
+- `max_clips` applies to each pass, so a 24-hour stream isn't limited to 25 clips in total.
+- Set it to 0 to clip only at the end.
 
 ## Tuning
 

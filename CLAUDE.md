@@ -41,7 +41,15 @@ Records a YouTube / Twitch / Kick live stream and its chat with no accounts or A
 - `config.example.toml` is tracked. `config.toml` is gitignored (it may hold `twitch_oauth_token`) and is auto-created from the example. `[stream]` holds only the defaults; dashboard jobs carry their own channels, and everything else is global (one config for all jobs, as the user chose).
 - `setup.sh` (brew, plus `ffmpeg-full` if there's no libass), `setup_linux.sh` (apt, Python ≥3.11 or the tomli backport, root without sudo works, builds whisper.cpp into bin/). Both take `--service`.
   - `deploy/install_service.sh` sets up systemd (Linux) or a LaunchAgent (macOS) and generates `.dashboard_token`.
-- Tests: `python -m unittest discover tests` (unit, ~10 s) and `python tests/e2e/run_e2e.py` (offline, ~3 min: 2 parallel live jobs, 1 VOD, a dashboard restart mid-recording, slot serialization, using fake streamlink, yt-dlp and chat).
+- Tests: `python -m unittest discover tests` (unit, ~25 s) plus offline e2e with fake streamlink, yt-dlp and chat.
+  - `python tests/e2e/run_e2e.py` (~4 min): 2 parallel watch jobs, a VOD, a live One-link job, a dashboard restart mid-recording, slot serialization.
+  - `python tests/e2e/run_hourly.py` (~2 min): clipping while live, then the end-of-stream pass without duplicates.
+
+- Clip requests: `spikes.find_clip_requests()` fires when ≥ `clip_min_users` different chatters match `clip_phrases` (whole words) within `clip_window_seconds`. `merge_requests()` folds a request into an overlapping spike (score += `clip_boost` × users, `kind="spike+request"`) or keeps it on its own. `find_all()` = spikes + requests, used everywhere.
+- Clips: each clip folder has `moment.json` (the dashboard prefers it over `spikes.json` order). `_add_clips()` cuts only moments without a clip near their start, appends to clips.md and spikes.json, and backs the "Add clip-request clips" button (`requests` job mode / CLI) and the windowed passes.
+- Live passes: while recording, every `process_every_minutes` a detached `clipper.py window <session> <since> <until>` clips `[since, until)`, leaving a margin of merge + length seconds. `.clipped_until` in the session records progress, and the end-of-stream `cmd_process(after_live=True)` only clips from there. `max_clips` applies per window.
+- Drive at boot: `wait_for_storage()` (`[storage] wait_for_drive_seconds`) is used by server autostart (in a thread) and `cmd_run`. The systemd unit waits for `remote-fs.target`.
+- `/api/clips` and the Clips tab list every clip across sessions.
 
 ## Timing rules (don't break)
 - Live sessions: `meta.rec_start_ms` = the moment the first video bytes hit disk, by local clock.
@@ -61,7 +69,7 @@ Records a YouTube / Twitch / Kick live stream and its chat with no accounts or A
 - The earlier real runs (20261119-0112 / -0115) hit `chat-downloader` "Unable to parse initial video data". That's fixed in 2bb2777.
 - The dev Mac's Homebrew ffmpeg 9 has **no libass**. Run `setup.sh` to get `ffmpeg-full`; until then clips render without captions or credit.
 - Next steps the user discussed:
-  1. **Clip-request trigger:** a moment fires when ≥3 *distinct* users say a clip phrase ("clip", "clip it", "clip that", "clipped", "clip karo", "!clip") within 20 s, even without a volume spike. Count each user once, boost the score, and mark it in clips.md. Configurable. Proposed but not built yet.
+  1. ~~Clip-request trigger~~ built 2026-11-19, with an "Add clip-request clips" button.
   2. Tune `multiplier` / `stream_delay_seconds` after real runs.
 - Twitch VOD chat still uses `chat-downloader` (best effort, may be broken too).
 - Verified 2026-11-19: unit + e2e pass on macOS (arm64), Debian 12 amd64 and arm64 (Docker), and Python 3.10 + tomli imports. On arm64 + gcc 12 the native whisper.cpp build fails, so setup_linux.sh falls back to `GGML_NATIVE=OFF`.

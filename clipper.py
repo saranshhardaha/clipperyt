@@ -5,6 +5,7 @@
   python clipper.py run <url>             one stream/video: live → record+clip, finished → download video + chat replay, clip
   python clipper.py process <session>     (re)make clips for a finished session
   python clipper.py spikes  <session>     just list spikes — use this to tune config.toml
+  python clipper.py requests <session>    add clips for clip requests (≥3 chatters said "clip") not clipped yet
   python clipper.py status                is it waiting / recording / clipping?
   python clipper.py doctor                check ffmpeg/libass, streamlink, yt-dlp, whisper
   python clipper.py job <id>              run one dashboard job (jobs/<id>/job.json) — server.py starts these
@@ -123,6 +124,26 @@ def streamlink_cookie_args(s: dict) -> list[str]:
 
 class StorageUnavailable(RuntimeError):
     pass
+
+
+def wait_for_storage(cfg: dict) -> None:
+    """Wait (up to [storage] wait_for_drive_seconds) for the recordings folder — after a reboot a
+    NAS/USB drive can mount a little after the dashboard starts. Raises StorageUnavailable after."""
+    limit = float(cfg["storage"].get("wait_for_drive_seconds", 300))
+    t0, said = time.time(), False
+    while True:
+        load_cfg()
+        err = check_dir(SESSIONS, create=SESSIONS == DEFAULT_SESSIONS)
+        if not err:
+            if said:
+                log(f"recordings folder is available after {time.time() - t0:.0f}s")
+            return
+        if time.time() - t0 >= limit:
+            raise StorageUnavailable(f"recordings folder unavailable: {err}")
+        if not said:
+            log(f"waiting up to {limit:.0f}s for the recordings folder: {err}")
+            said = True
+        time.sleep(5)
 
 
 def resolve_dir(raw: str) -> Path:
@@ -503,6 +524,7 @@ def record_once(cfg: dict, wait_name: str = "_waiting", job: str | None = None) 
                            stderr=subprocess.STDOUT)
     chats: list[subprocess.Popen] = []
     session: Path | None = None
+    pass_proc: subprocess.Popen | None = None
     try:
         # recording "starts" when the first bytes hit disk — that's t=0 for the video
         seen, last_check, last_probe = "", 0.0, 0.0
@@ -557,9 +579,25 @@ def record_once(cfg: dict, wait_name: str = "_waiting", job: str | None = None) 
         # even when the file has gaps (skipped ads, stalls, reconnects).
         tl = open(session / "timeline.tsv", "a", buffering=1)
         last = time.time()
+        # long streams: clip what's recorded so far every process_every_minutes, in a separate
+        # process (own session, so Stop doesn't interrupt it) while recording continues
+        every = float(cfg["clip"].get("process_every_minutes", 60) or 0) * 60
+        next_pass = time.time() + every if every > 0 else None
         while rec.poll() is None:
             time.sleep(1)
             tl.write(f"{int(time.time() * 1000)}\t{video.stat().st_size}\n")
+            if next_pass and time.time() >= next_pass:
+                next_pass += every
+                if pass_proc is None or pass_proc.poll() is not None:
+                    since = clipped_until(session) or 0.0
+                    # leave a margin so a moment still building up isn't cut short
+                    until = ((time.time() * 1000 - rec_start_ms) / 1000 - float(cfg["spikes"].get("merge_seconds", 60))
+                             - float(cfg["clip"].get("length_seconds", 45)))
+                    if until > since:
+                        log(f"clipping {spikes.fmt(since)}–{spikes.fmt(until)} in the background, recording continues")
+                        pass_proc = subprocess.Popen([PY, "-u", str(ROOT / "clipper.py"), "window", str(session),
+                                                      f"{since:.0f}", f"{until:.0f}"],
+                                                     stdin=subprocess.DEVNULL, start_new_session=True)
             if time.time() - last > 600:
                 n = sum(sum(1 for _ in open(f, encoding="utf-8", errors="ignore"))
                         for f in session.glob("chat*.tsv"))
@@ -577,6 +615,9 @@ def record_once(cfg: dict, wait_name: str = "_waiting", job: str | None = None) 
         stop(rec)
         for c in chats:
             stop(c)
+        if pass_proc and pass_proc.poll() is None:  # let the hourly pass finish before the final one
+            log("waiting for the background clipping pass to finish …")
+            pass_proc.wait()
 
 
 # ---------------------------------------------------------------- clipping
@@ -588,9 +629,13 @@ def session_moments(session: Path, cfg: dict) -> list[spikes.Moment]:
         log("no chat logs in this session")
         return []
     chat = sorted((row for f in files for row in spikes.load_chat(str(f))), key=lambda r: r[0])
-    moments = spikes.find_moments(chat, meta["rec_start_ms"], cfg["spikes"])
+    moments = spikes.find_all(chat, meta["rec_start_ms"], cfg["spikes"])  # chat spikes + clip requests
     keep = sorted(moments, key=lambda m: m.score, reverse=True)[: cfg["clip"].get("max_clips", 25)]
     return sorted(keep, key=lambda m: m.onset)
+
+
+def moment_label(m: spikes.Moment) -> str:
+    return f"clip requested ×{m.requests}" if m.requests else ""
 
 
 def cmd_spikes(session: Path) -> None:
@@ -598,75 +643,201 @@ def cmd_spikes(session: Path) -> None:
     ms = session_moments(session, cfg)
     print(f"{len(ms)} moments")
     for m in ms:
-        print(f"  {spikes.fmt(m.onset)}  score {m.score:5.1f}  {m.messages:4d} msgs  | {' · '.join(m.top[:3])}")
+        tag = f"  [clip requested ×{m.requests}]" if m.requests else ""
+        print(f"  {spikes.fmt(m.onset)}  score {m.score:5.1f}  {m.messages:4d} msgs{tag}  | {' · '.join(m.top[:3])}")
 
 
-def cmd_process(session: Path) -> None:
+def cmd_process(session: Path, requests_only: bool = False, after_live: bool = False) -> None:
+    """(Re)make clips. requests_only: just add clips for clip-request moments that
+    aren't clipped yet — existing clips are kept. after_live: if hourly passes already
+    clipped part of the stream, only clip the rest."""
     cfg = load_cfg()
     with processing_slot(cfg["limits"].get("max_parallel_processing", 1)):
-        _process(session, cfg)
+        done = clipped_until(session) if after_live else None
+        if requests_only:
+            _process_requests(session, cfg)
+        elif done is not None:
+            _process_window(session, cfg, done, None)
+        else:
+            _process(session, cfg)
 
 
-def _process(session: Path, cfg: dict) -> None:
-    meta = json.loads((session / "meta.json").read_text())
-    video = next((session / f for f in ("stream.ts", "stream.mp4", "stream.mkv")
-                  if (session / f).exists()), session / "stream.ts")
-    c, cap, rnd = cfg["clip"], cfg["captions"], cfg["render"]
-    moments = session_moments(session, cfg)
-    log(f"{len(moments)} chat spikes in {session.name}")
-    if read_state().get("pid") == os.getpid():
-        set_state("processing", session=session.name, clips=len(moments))
-    (session / "spikes.json").write_text(json.dumps([m.to_dict() for m in moments], indent=2,
-                                                    ensure_ascii=False))
-    if not moments:
-        return
+CLIP_RE = re.compile(r"^(\d+)_(\d\d)-(\d\d)-(\d\d)$")
+CREDIT_LINE = "\nCredit the streamer and link the stream in every post."
 
-    chans = meta.get("chat_from") or {meta["platform"]: meta["channel"]}
-    plat = " / ".join(NAMES[p] for p in chans)
-    credit = f"@{meta['channel'].lstrip('@')} · {plat}" if rnd.get("credit", True) else None
-    out_dir = session / "clips"
-    out_dir.mkdir(exist_ok=True)
-    index = [f"# Clips — {meta['channel']} ({plat}) — {meta['started']}\n",
-             "Links: " + " · ".join([meta["source_url"]] if meta.get("source_url") else
-                                    [stream_url(p, c) for p, c in chans.items()]) + "\n",
-             "| # | time in stream | score | chat said | file |", "|---|---|---|---|---|"]
 
-    for n, m in enumerate(moments, 1):
-        # chat reacts AFTER the moment, and viewers see the stream late → shift back
-        start = max(0.0, m.onset - c["stream_delay_seconds"] - c["lead_seconds"])
+def clip_start(m: spikes.Moment, c: dict) -> float:
+    # chat reacts AFTER the moment, and viewers see the stream late → shift back
+    return max(0.0, m.onset - c["stream_delay_seconds"] - c["lead_seconds"])
+
+
+def existing_clips(session: Path) -> list[tuple[int, float, Path]]:
+    """(number, start seconds, folder) for clips/NN_HH-MM-SS that have a finished video."""
+    out = []
+    for d in (session / "clips").glob("*/") if (session / "clips").exists() else []:
+        mm = CLIP_RE.match(d.name)
+        if mm and any((d / f).exists() for f in ("short.mp4", "captioned.mp4")):
+            h, mi, se = int(mm[2]), int(mm[3]), int(mm[4])
+            out.append((int(mm[1]), h * 3600 + mi * 60 + se, d))
+    return sorted(out)
+
+
+class _ClipMaker:
+    """Cut + caption + render one moment into clips/NN_HH-MM-SS/ (shared by full and add-only runs)."""
+
+    def __init__(self, session: Path, cfg: dict):
+        self.session, self.cfg = session, cfg
+        self.meta = json.loads((session / "meta.json").read_text())
+        self.video = next((session / f for f in ("stream.ts", "stream.mp4", "stream.mkv")
+                           if (session / f).exists()), session / "stream.ts")
+        chans = self.meta.get("chat_from") or {self.meta["platform"]: self.meta["channel"]}
+        self.chans = chans
+        self.plat = " / ".join(NAMES[p] for p in chans)
+        self.credit = (f"@{self.meta['channel'].lstrip('@')} · {self.plat}"
+                       if cfg["render"].get("credit", True) else None)
+        (session / "clips").mkdir(exist_ok=True)
+
+    def header(self) -> list[str]:
+        meta = self.meta
+        links = [meta["source_url"]] if meta.get("source_url") else [stream_url(p, c) for p, c in self.chans.items()]
+        return [f"# Clips — {meta['channel']} ({self.plat}) — {meta['started']}\n",
+                "Links: " + " · ".join(links) + "\n",
+                "| # | time in stream | score | chat said | file |", "|---|---|---|---|---|"]
+
+    def make(self, n: int, m: spikes.Moment) -> str:
+        """Returns the clips.md row."""
+        c, cap, rnd = self.cfg["clip"], self.cfg["captions"], self.cfg["render"]
+        start = clip_start(m, c)
         name = f"{n:02d}_{spikes.fmt(start).replace(':', '-')}"
-        d = out_dir / name
+        d = self.session / "clips" / name
         d.mkdir(exist_ok=True)
         raw = d / "raw.mp4"
-        log(f"clip {n}/{len(moments)} at {spikes.fmt(start)} (score {m.score})")
-        update_state(done=n - 1)
+        said = " · ".join(([moment_label(m)] if m.requests else [])
+                          + [t for t in m.top[:3] if not t.startswith("clip requested")])
+        log(f"clip {n} at {spikes.fmt(start)} (score {m.score}{', ' + moment_label(m) if m.requests else ''})")
         try:
-            timeline = session / "timeline.tsv"
+            timeline = self.session / "timeline.tsv"
             if timeline.exists():  # gap-proof: wall clock → byte offset
-                render.cut_wallclock(video, timeline, meta["rec_start_ms"] / 1000 + start,
+                render.cut_wallclock(self.video, timeline, self.meta["rec_start_ms"] / 1000 + start,
                                      c["length_seconds"], raw)
             else:
-                render.cut(video, start, c["length_seconds"], raw)
+                render.cut(self.video, start, c["length_seconds"], raw)
             speech = d / "speech.srt"
             have_speech = cap.get("enabled", True) and render.transcribe(raw, speech, cap, ROOT)
             subs = d / "subs.ass"
-            has_subs = render.build_subs(speech if have_speech else None, credit,
+            has_subs = render.build_subs(speech if have_speech else None, self.credit,
                                          c["length_seconds"], subs, rnd)
             final = d / ("short.mp4" if render.is_vertical(rnd) else "captioned.mp4")
             for old in ("short.mp4", "captioned.mp4"):  # format changed since last run
                 (d / old).unlink(missing_ok=True)
             render.render(raw, subs if has_subs else None, final, rnd)
             (d / "chat.txt").write_text("\n".join(m.top), encoding="utf-8")
-            index.append(f"| {n} | {spikes.fmt(start)} | {m.score} | "
-                         f"{' · '.join(m.top[:3]).replace('|', '/')} | {name}/{final.name} |")
+            (d / "moment.json").write_text(json.dumps(m.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+            return (f"| {n} | {spikes.fmt(start)} | {m.score} | "
+                    f"{('**' + moment_label(m) + '** · ' if m.requests else '')}"
+                    f"{' · '.join(t for t in m.top[:3] if not t.startswith('clip requested')).replace('|', '/')} "
+                    f"| {name}/{final.name} |")
         except Exception as e:
             log(f"  ! clip {n} failed: {e}")
-            index.append(f"| {n} | {spikes.fmt(start)} | {m.score} | FAILED | {e!s:.60} |")
+            return f"| {n} | {spikes.fmt(start)} | {m.score} | FAILED | {e!s:.60} |"
 
-    index.append("\nCredit the streamer and link the stream in every post.")
+
+def _process(session: Path, cfg: dict) -> None:
+    moments = session_moments(session, cfg)
+    nreq = sum(1 for m in moments if m.requests)
+    log(f"{len(moments)} moments in {session.name}" + (f" ({nreq} with clip requests)" if nreq else ""))
+    if read_state().get("pid") == os.getpid():
+        set_state("processing", session=session.name, clips=len(moments))
+    (session / "spikes.json").write_text(json.dumps([m.to_dict() for m in moments], indent=2,
+                                                    ensure_ascii=False))
+    if not moments:
+        return
+    maker = _ClipMaker(session, cfg)
+    index = maker.header()
+    for n, m in enumerate(moments, 1):
+        update_state(done=n - 1)
+        index.append(maker.make(n, m))
+    index.append(CREDIT_LINE)
     (session / "clips.md").write_text("\n".join(index) + "\n", encoding="utf-8")
     update_state(done=len(moments))
     log(f"done → {session.name}/clips.md")
+
+
+def _session_chat(session: Path) -> tuple[dict, list]:
+    meta = json.loads((session / "meta.json").read_text())
+    files = sorted(session.glob("chat*.tsv"))
+    chat = sorted((row for f in files for row in spikes.load_chat(str(f))), key=lambda r: r[0])
+    return meta, chat
+
+
+def _add_clips(session: Path, cfg: dict, moments: list[spikes.Moment], what: str) -> int:
+    """Clip the moments that don't have a clip yet; keep existing clips; append to clips.md."""
+    have = existing_clips(session)
+    half = cfg["clip"]["length_seconds"] / 2
+    new = [m for m in moments if not any(abs(clip_start(m, cfg["clip"]) - st) < half for _, st, _ in have)]
+    log(f"{len(moments)} {what} in {session.name}: {len(moments) - len(new)} already clipped, {len(new)} new")
+    if read_state().get("pid") == os.getpid():
+        set_state("processing", session=session.name, clips=len(new), done=0)
+    if not new:
+        return 0
+    maker = _ClipMaker(session, cfg)
+    n0 = max((n for n, _, _ in have), default=0)
+    rows = []
+    for i, m in enumerate(new, 1):
+        update_state(done=i - 1)
+        rows.append(maker.make(n0 + i, m))
+    md = session / "clips.md"
+    old = (md.read_text(encoding="utf-8").replace(CREDIT_LINE, "").rstrip("\n") if md.exists()
+           else "\n".join(maker.header()))
+    md.write_text(old + "\n" + "\n".join(rows) + "\n" + CREDIT_LINE + "\n", encoding="utf-8")
+    try:  # keep spikes.json listing every moment that has a clip
+        known = json.loads((session / "spikes.json").read_text()) if (session / "spikes.json").exists() else []
+    except Exception:
+        known = []
+    (session / "spikes.json").write_text(json.dumps(known + [m.to_dict() for m in new], indent=2,
+                                                    ensure_ascii=False))
+    update_state(done=len(new))
+    log(f"added {len(new)} clip(s) → {session.name}/clips.md")
+    return len(new)
+
+
+def _process_requests(session: Path, cfg: dict) -> None:
+    """Add clips for clip-request moments that don't have a clip yet (existing clips are kept)."""
+    meta, chat = _session_chat(session)
+    sp = {**cfg["spikes"], "clip_requests": True}  # the button means "do it", even if auto is off
+    moments = [m for m in spikes.find_all(chat, meta["rec_start_ms"], sp) if m.requests]
+    _add_clips(session, cfg, moments, "clip-request moments")
+
+
+CLIPPED_UNTIL = ".clipped_until"  # seconds into the recording already clipped by live (hourly) passes
+
+
+def _process_window(session: Path, cfg: dict, since: float, until: float | None) -> None:
+    """Clip moments with since <= onset < until (None = to the end). max_clips applies per window,
+    so a 24-hour stream clipped hourly isn't capped at max_clips in total."""
+    meta, chat = _session_chat(session)
+    if not chat:
+        log("no chat logs in this session")
+    allm = spikes.find_all(chat, meta["rec_start_ms"], cfg["spikes"]) if chat else []
+    win = [m for m in allm if m.onset >= since and (until is None or m.onset < until)]
+    keep = sorted(win, key=lambda m: m.score, reverse=True)[: cfg["clip"].get("max_clips", 25)]
+    span = f"{spikes.fmt(since)}–{spikes.fmt(until) if until is not None else 'end'}"
+    _add_clips(session, cfg, sorted(keep, key=lambda m: m.onset), f"moments in {span}")
+    if until is not None:
+        (session / CLIPPED_UNTIL).write_text(f"{until:.0f}")
+
+
+def clipped_until(session: Path) -> float | None:
+    try:
+        return float((session / CLIPPED_UNTIL).read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def cmd_window(session: Path, since: float, until: float | None) -> None:
+    cfg = load_cfg()
+    with processing_slot(cfg["limits"].get("max_parallel_processing", 1)):
+        _process_window(session, cfg, since, until)
 
 
 def cmd_status() -> None:
@@ -714,7 +885,7 @@ def probe(url: str) -> dict:
 
 def cmd_run(url: str, wait_name: str = "_waiting", job: str | None = None) -> None:
     plat = platform_of(url)
-    load_cfg()  # cookies for yt-dlp
+    wait_for_storage(load_cfg())  # also loads cookies for yt-dlp
     info = probe(url)
     status = info.get("live_status") or ("is_live" if info.get("is_live") else "not_live")
     name = (info.get("uploader_id") or info.get("channel") or info.get("uploader") or "streamer").lstrip("@")
@@ -725,7 +896,7 @@ def cmd_run(url: str, wait_name: str = "_waiting", job: str | None = None) -> No
         s.update(url=url, record_from=plat, channels={plat: name})
         session = record_once(cfg, wait_name, job)  # one stream only, no loop
         if session:
-            cmd_process(session)
+            cmd_process(session, after_live=True)
         set_state("idle")
     else:
         cmd_vod(url, plat, name, info, job)
@@ -834,7 +1005,7 @@ def cmd_watch(job: dict | None = None) -> None:
             session = None
         if session:
             try:
-                cmd_process(session)
+                cmd_process(session, after_live=True)
             except Exception as e:
                 log(f"processing failed: {e}")
         if STOP or STOPFILE.exists():
@@ -914,7 +1085,7 @@ def cmd_job(jid: str) -> None:
             if not session:
                 raise SystemExit(f"session {job['session']} not found (drive disconnected?)")
             set_state("processing", session=session.name)
-            cmd_process(session)
+            cmd_process(session, requests_only=job.get("mode") == "requests")
         else:
             raise SystemExit(f"unknown job kind {job['kind']!r}")
     except KeyboardInterrupt:
@@ -959,12 +1130,19 @@ def main() -> None:
         except KeyboardInterrupt:
             pass
         return
-    if args[0] in ("process", "spikes") and len(args) == 2:
+    if args[0] == "window" and len(args) in (3, 4):
+        session = Path(args[1])
+        cmd_window(session, float(args[2]), float(args[3]) if len(args) == 4 else None)
+        return
+    if args[0] in ("process", "spikes", "requests") and len(args) == 2:
         session = Path(args[1])
         if not session.is_dir():
             load_cfg()
             session = find_session(args[1]) or SESSIONS / args[1]
-        (cmd_process if args[0] == "process" else cmd_spikes)(session)
+        if args[0] == "requests":
+            cmd_process(session, requests_only=True)
+        else:
+            (cmd_process if args[0] == "process" else cmd_spikes)(session)
         return
     print(__doc__)
 

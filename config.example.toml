@@ -46,12 +46,22 @@ hype_words = ["omg", "lol", "lmao", "gg", "w", "l", "bhai", "op", "kya", "bc", "
               # Twitch emotes arrive as words
               "kekw", "lul", "omegalul", "pogchamp", "poggers", "monkas", "pepelaugh", "kappa", "lulw", "sadge", "ez", "clap"]
 hype_weight = 0.5           # each hype message counts as 1.5 instead of 1
+# Clip requests: >= clip_min_users different chatters saying a clip phrase within
+# clip_window_seconds is a moment too (even without a spike). Whole words, any case.
+clip_requests = true
+clip_phrases = ["clip", "clip it", "clip that", "clip this", "clipped", "clip karo", "clip kro", "clip kar do", "!clip"]
+clip_min_users = 3
+clip_window_seconds = 20
+clip_boost = 1.0            # score added per requesting chatter (also boosts an overlapping spike)
 
 [clip]
 stream_delay_seconds = 8    # viewers see the stream ~8 s late, so chat reacts late
 lead_seconds = 30           # start clip this long before the (delay-corrected) spike
 length_seconds = 45
-max_clips = 25              # keep only the top N per stream
+max_clips = 25              # keep only the top N per stream (per hour while clipping live)
+# Long streams (some run 24 h+): clip what's recorded so far every N minutes while
+# recording continues; at the end only the rest is clipped. 0 = clip only at the end.
+process_every_minutes = 60
 
 [captions]
 enabled = true
@@ -80,6 +90,9 @@ credit = true               # small "@channel on YouTube/Kick" credit burned in 
 sessions_dir = ""
 # Older recordings folders whose sessions are still listed (filled in when you change sessions_dir)
 also_scan = []
+# After a reboot the drive may mount after the dashboard starts: autostart and One-link jobs
+# wait up to this long for the recordings folder (watch jobs keep retrying after that anyway)
+wait_for_drive_seconds = 300
 
 [limits]
 # How many streams can be cut + transcribed + rendered at the same time.

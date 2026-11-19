@@ -126,7 +126,9 @@ def create_job(data: dict) -> tuple[dict | None, str | None]:
         if not SESSION_RE.match(sid) or not clipper.find_session(sid):
             return None, "no such session"
         job["session"] = sid
-        name = data.get("name") or f"re-clip {sid}"
+        if data.get("mode") == "requests":
+            job["mode"] = "requests"
+        name = data.get("name") or (f"clip requests {sid}" if job.get("mode") else f"re-clip {sid}")
     else:
         return None, "kind must be watch, url or process"
     job["name"] = str(name)[:60]
@@ -165,13 +167,27 @@ def all_jobs() -> list[dict]:
 
 
 def autostart() -> None:
+    """Start jobs marked autostart — in the background, once the recordings folder is reachable
+    (a NAS/USB drive may mount after the dashboard starts on boot)."""
+    todo = []
     for f in sorted(JOBS.glob("*/job.json")) if JOBS.exists() else []:
         try:
             job = json.loads(f.read_text())
         except Exception:
             continue
         if job.get("autostart") and not is_running(job_state(job["id"])):
-            print(f"autostart: {job['id']} → {start_job(job['id'])}", flush=True)
+            todo.append(job["id"])
+    if not todo:
+        return
+
+    def run():
+        try:
+            clipper.wait_for_storage(clipper.load_cfg())
+        except clipper.StorageUnavailable as e:
+            print(f"autostart: {e} — starting anyway; watch jobs keep retrying", flush=True)
+        for jid in todo:
+            print(f"autostart: {jid} → {start_job(jid)}", flush=True)
+    threading.Thread(target=run, daemon=True).start()
 
 
 # ------------------------------------------------------------------ data
@@ -239,12 +255,18 @@ def session_detail(sid: str) -> dict:
                           if (d / "clips").exists() else []):
         final = next((c / f for f in ("short.mp4", "captioned.mp4") if (c / f).exists()), None)
         m = spikes_[n] if n < len(spikes_) else {}
+        if (c / "moment.json").exists():  # exact moment for this clip (clips can be added later)
+            try:
+                m = json.loads((c / "moment.json").read_text())
+            except Exception:
+                pass
         clips.append({
             "name": c.name, "video": f"/files/{sid}/clips/{c.name}/{final.name}" if final else None,
             "vertical": bool(final and final.name == "short.mp4"),
             "raw": f"/files/{sid}/clips/{c.name}/raw.mp4" if (c / "raw.mp4").exists() else None,
             "srt": f"/files/{sid}/clips/{c.name}/speech.srt" if (c / "speech.srt").exists() else None,
             "score": m.get("score"), "messages": m.get("messages"), "top": m.get("top", []),
+            "requests": m.get("requests", 0), "kind": m.get("kind", "spike"),
         })
     try:
         meta = json.loads((d / "meta.json").read_text())
@@ -256,6 +278,50 @@ def session_detail(sid: str) -> dict:
             "process_log": tail(d / "process.log", 30)}
 
 
+def all_clips(channel: str = "", requested: bool = False, sort: str = "new",
+              offset: int = 0, limit: int = 48) -> dict:
+    """Every finished clip across all sessions/folders, for the Clips tab."""
+    items, chans = [], set()
+    for d in all_session_dirs():
+        try:
+            meta = json.loads((d / "meta.json").read_text())
+        except Exception:
+            meta = {}
+        ch = meta.get("channel", "?")
+        chans.add(ch)
+        if channel and ch != channel:
+            continue
+        spikes_ = []
+        if (d / "spikes.json").exists():
+            try:
+                spikes_ = json.loads((d / "spikes.json").read_text())
+            except Exception:
+                pass
+        clip_dirs = sorted(p for p in (d / "clips").glob("*/") if p.is_dir()) if (d / "clips").exists() else []
+        for n, c in enumerate(clip_dirs):
+            final = next((c / f for f in ("short.mp4", "captioned.mp4") if (c / f).exists()), None)
+            if not final:
+                continue
+            m = spikes_[n] if n < len(spikes_) else {}
+            if (c / "moment.json").exists():
+                try:
+                    m = json.loads((c / "moment.json").read_text())
+                except Exception:
+                    pass
+            if requested and not m.get("requests"):
+                continue
+            base = f"/files/{d.name}/clips/{c.name}"
+            items.append({"session": d.name, "channel": ch, "platform": meta.get("platform"),
+                          "title": meta.get("title"), "name": c.name, "made": int(final.stat().st_mtime),
+                          "video": f"{base}/{final.name}", "vertical": final.name == "short.mp4",
+                          "raw": f"{base}/raw.mp4" if (c / "raw.mp4").exists() else None,
+                          "srt": f"{base}/speech.srt" if (c / "speech.srt").exists() else None,
+                          "score": m.get("score"), "requests": m.get("requests", 0),
+                          "top": [t for t in m.get("top", []) if not t.startswith("clip requested")][:3]})
+    items.sort(key=(lambda x: x["score"] or 0) if sort == "score" else (lambda x: x["made"]), reverse=True)
+    return {"total": len(items), "clips": items[offset: offset + limit], "channels": sorted(chans)}
+
+
 def session_spikes(sid: str) -> list[dict]:
     cfg = clipper.load_cfg()
     c = cfg["clip"]
@@ -263,7 +329,8 @@ def session_spikes(sid: str) -> list[dict]:
     for m in clipper.session_moments(clipper.find_session(sid), cfg):
         start = max(0.0, m.onset - c["stream_delay_seconds"] - c["lead_seconds"])
         out.append({"onset": clipper.spikes.fmt(m.onset), "clip_start": clipper.spikes.fmt(start),
-                    "score": m.score, "messages": m.messages, "top": m.top[:3]})
+                    "score": m.score, "messages": m.messages, "top": m.top[:3],
+                    "requests": m.requests, "kind": m.kind})
     return out
 
 
@@ -479,6 +546,10 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"log": tail(JOBS / m[1] / "job.log", int(q.get("n", ["200"])[0]))})
         if path == "/api/sessions":
             return self.send(200, sessions())
+        if path == "/api/clips":
+            g = lambda k, d="": q.get(k, [d])[0]
+            return self.send(200, all_clips(g("channel"), g("requested") == "1", g("sort", "new"),
+                                            int(g("offset", "0") or 0), min(200, int(g("limit", "48") or 48))))
         if m := re.fullmatch(r"/api/sessions/([\w-]+)", path):
             if self.session_or_404(m[1]):
                 self.send(200, session_detail(m[1]))
@@ -545,7 +616,7 @@ class H(BaseHTTPRequestHandler):
             skipped = sum(1 for d in all_session_dirs() if needs_move(d) and d.name in busy)
             return self.send(200, {"result": f"moving {len(todo)} session(s)"
                                              + (f", {skipped} busy — try again later" if skipped else "")})
-        if m := re.fullmatch(r"/api/sessions/([\w-]+)/(process|delete-source|delete|move)", path):
+        if m := re.fullmatch(r"/api/sessions/([\w-]+)/(process|requests|delete-source|delete|move)", path):
             sid, act = m[1], m[2]
             if not self.session_or_404(sid):
                 return
@@ -556,10 +627,11 @@ class H(BaseHTTPRequestHandler):
                 if err:
                     return self.send(400, {"error": err})
                 return self.send(200, {"result": mover.enqueue(sid)})
-            if act == "process":
+            if act in ("process", "requests"):
                 if sid in busy_sessions():
                     return self.send(400, {"error": "already being worked on"})
-                job, err = create_job({"kind": "process", "session": sid})
+                job, err = create_job({"kind": "process", "session": sid,
+                                       "mode": "requests" if act == "requests" else None})
                 return self.send(200, {"result": start_job(job["id"]), "job": job})
             return self.send(200, {"result": delete_session(sid, act == "delete-source")})
         if path == "/api/settings":

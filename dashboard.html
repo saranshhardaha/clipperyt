@@ -14,7 +14,7 @@
   --acc:#3b5bdb;--acc-fg:#fff;--ok:#16a34a;--warn:#b7791f;--bad:#d63c41;--live:#e03131;
   --pill-live:#ffe3e3;--pill-wait:#fff3d6;--pill-work:#e0e8ff;--pill-off:#eceef2;--pill-ok:#dcf5e5;
 }}
-*{box-sizing:border-box}
+*{box-sizing:border-box}[hidden]{display:none!important}
 body{margin:0;font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--fg)}
 a{color:var(--acc)}
 header{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
@@ -89,7 +89,7 @@ tr.click{cursor:pointer}tr.click:hover{background:var(--card2)}
 <header><div class="bar">
   <div class="logo"><i id="dot"></i>clipperyt</div>
   <nav id="tabs">
-    <button data-t="jobs" class="on">Jobs</button><button data-t="sessions">Sessions</button>
+    <button data-t="jobs" class="on">Jobs</button><button data-t="clips">Clips</button><button data-t="sessions">Sessions</button>
     <button data-t="settings">Settings</button><button data-t="system">System</button>
   </nav>
   <div class="chips" id="chips"></div>
@@ -124,6 +124,20 @@ tr.click{cursor:pointer}tr.click:hover{background:var(--card2)}
   <div class="row between" style="margin:4px 0 10px"><h2 style="margin:0">Jobs</h2>
     <button class="sm" id="clear">Clear finished</button></div>
   <div class="grid" id="jobs"></div>
+</div>
+
+<!-- ============ CLIPS ============ -->
+<div id="v-clips" hidden>
+  <div class="card">
+    <div class="row between"><h2 style="margin:0">Clips <span class="mut" id="c-total" style="font-weight:400"></span></h2>
+      <div class="row">
+        <select id="c-chan" style="width:auto;padding:4px 8px"><option value="">All channels</option></select>
+        <select id="c-sort" style="width:auto;padding:4px 8px"><option value="new">Newest</option><option value="score">Best score</option></select>
+        <label class="row" style="gap:6px;font-size:13px"><input type="checkbox" id="c-req"> Clip requests only</label>
+      </div></div>
+  </div>
+  <div class="clips" id="c-grid"></div>
+  <div class="row" style="justify-content:center;margin:14px 0"><button id="c-more" hidden>Load more</button></div>
 </div>
 
 <!-- ============ SESSIONS ============ -->
@@ -173,7 +187,8 @@ $('tabs').onclick=e=>{const b=e.target.closest('button');if(b)show(b.dataset.t)}
 function show(t){
   if(tab==='settings'&&t!=='settings'&&dirty&&!confirm('Leave without saving settings?'))return;
   if(tab!==t)scrollTo(0,0);tab=t;for(const b of $('tabs').children)b.classList.toggle('on',b.dataset.t===t);
-  for(const v of['jobs','sessions','settings','system'])$('v-'+v).hidden=v!==t;
+  for(const v of['jobs','clips','sessions','settings','system'])$('v-'+v).hidden=v!==t;
+  if(t==='clips')loadClips(false);
   if(t==='sessions')loadSessions();if(t==='settings')loadSettings();if(t==='system')loadSystem();
   history.replaceState(null,'','#'+t+(t==='sessions'&&curSession?'/'+curSession:''));
 }
@@ -314,7 +329,9 @@ async function openSession(id,soft){
   const chat=Object.entries(s.chat_by_platform||{}).map(([p,n])=>`${NAMES[p]||p} ${num(n)}`).join(' · ');
   const head=`<div class="card">
     <div class="row between"><div class="row"><button class="sm" id="back">← Sessions</button><h2 style="margin:0">${esc(id)}</h2>${d.busy?busyPill(d.busy,d.move):''}</div>
-      <div class="row"><button class="sm" id="spk">List spikes</button><button class="sm pri" id="reclip" ${d.busy||!s.has_source?'disabled':''}>Re-make clips</button>
+      <div class="row"><button class="sm" id="spk">List spikes</button>
+      <button class="sm" id="reqclip" ${d.busy||!s.has_source?'disabled':''} title="Cut clips for moments where 3+ chatters asked for a clip, that don't have a clip yet. Existing clips stay.">Add clip-request clips</button>
+      <button class="sm pri" id="reclip" ${d.busy||!s.has_source?'disabled':''}>Re-make clips</button>
       <button class="sm" id="delsrc" ${d.busy||!s.has_source?'disabled':''}>Free disk (delete video)</button>${d.in_recordings_folder?'':`<button class="sm" id="mvses" ${d.busy?'disabled':''}>${d.unsorted?'Move into channel folder':'Move to recordings folder'}</button>`}<button class="sm bad" id="delses" ${d.busy?'disabled':''}>Delete</button></div></div>
     <div class="mut" style="margin:8px 0 12px;overflow-wrap:anywhere">${esc(m.channel||'')} · ${esc(NAMES[m.platform]||m.platform||'')}${m.title?' · '+esc(m.title):''} · started ${esc(m.started||'')}
       ${m.source_url?` · <a href="${esc(m.source_url)}" target="_blank" rel="noopener">source</a>`:''}${d.clips_md?` · <a href="${d.clips_md}" target="_blank">clips.md</a>`:''}
@@ -333,8 +350,8 @@ async function openSession(id,soft){
     clipSig=sig;const c=document.createElement('div');c.className='clips';c.id='clips';
     c.innerHTML=d.clips.map(c=>`<div class="clip">
       ${c.video?`<video src="${c.video}" controls preload="metadata" playsinline style="aspect-ratio:${c.vertical?'9/16':'16/9'}"></video>`:'<div class="err">render failed — see log</div>'}
-      <div style="margin-top:6px"><b>${esc(c.name)}</b> ${c.score!=null?`<span class="mut">· score ${c.score}${c.messages?` · ${c.messages} msgs`:''}</span>`:''}</div>
-      <div class="t">${esc((c.top||[]).slice(0,3).join(' · '))}</div>
+      <div style="margin-top:6px"><b>${esc(c.name)}</b> ${c.requests?`<span class="tag" style="color:var(--acc);border-color:var(--acc)">CLIP REQUEST ×${c.requests}</span> `:''}${c.score!=null?`<span class="mut">· score ${c.score}${c.messages?` · ${c.messages} msgs`:''}</span>`:''}</div>
+      <div class="t">${esc((c.top||[]).filter(t=>!t.startsWith('clip requested')).slice(0,3).join(' · '))}</div>
       <div class="row" style="margin-top:6px">${c.video?`<a class="btn sm" href="${c.video}?download=1">Download</a>`:''}
       ${c.raw?`<a class="btn sm" href="${c.raw}?download=1">Raw</a>`:''}${c.srt?`<a class="btn sm" href="${c.srt}" target="_blank">Captions</a>`:''}</div></div>`).join('')||'<div class="mut">No clips yet.</div>';
     $('clips-slot').replaceWith(c);
@@ -342,8 +359,9 @@ async function openSession(id,soft){
   $('back').onclick=()=>{curSession=null;history.replaceState(null,'','#sessions');loadSessions()};
   $('spk').onclick=async()=>{$('spikes').innerHTML='<div class="mut" style="margin-top:12px">Finding spikes…</div>';const r=await j(`/api/sessions/${id}/spikes`);
     $('spikes').innerHTML=r.error?`<div class="err">${esc(r.error)}</div>`:`<div class="scroll" style="margin-top:12px"><table><thead><tr><th>Chat reacts</th><th>Clip starts</th><th class="n">Score</th><th class="n">Msgs</th><th>Chat said</th></tr></thead><tbody>${
-      r.map(x=>`<tr><td>${x.onset}</td><td>${x.clip_start}</td><td class="n">${x.score}</td><td class="n">${x.messages}</td><td class="mut">${esc(x.top.join(' · '))}</td></tr>`).join('')||'<tr><td colspan=5 class="mut">No spikes with the current settings.</td></tr>'}</tbody></table></div>
+      r.map(x=>`<tr><td>${x.onset}${x.requests?` <span class="tag" style="color:var(--acc);border-color:var(--acc)">CLIP REQUEST ×${x.requests}</span>`:''}</td><td>${x.clip_start}</td><td class="n">${x.score}</td><td class="n">${x.messages}</td><td class="mut">${esc(x.top.filter(t=>!t.startsWith('clip requested')).join(' · '))}</td></tr>`).join('')||'<tr><td colspan=5 class="mut">No spikes with the current settings.</td></tr>'}</tbody></table></div>
       <div class="help">Uses current Settings — tune Spike detection, then Re-make clips.</div>`};
+  $('reqclip').onclick=async()=>{const r=await post(`/api/sessions/${id}/requests`);toast(r.error||'Finding clip requests — new clips appear here as they finish');openSession(id,true)};
   $('reclip').onclick=async()=>{const r=await post(`/api/sessions/${id}/process`);toast(r.result||r.error);openSession(id,true)};
   $('delsrc').onclick=async()=>{if(!confirm('Delete the full recording for this session? Clips stay, but you can no longer re-make them. This cannot be undone.'))return;
     const r=await post(`/api/sessions/${id}/delete-source`);toast(r.result||r.error);openSession(id,true)};
@@ -351,6 +369,33 @@ async function openSession(id,soft){
   $('delses').onclick=async()=>{if(!confirm('Delete this whole session — recording, chat and clips? This cannot be undone.'))return;
     const r=await post(`/api/sessions/${id}/delete`);toast(r.result||r.error);curSession=null;loadSessions()};
 }
+
+// ---------- clips (all sessions)
+let clipOffset=0;
+function clipCard(c){
+  return `<div class="clip">
+    <video src="${c.video}" controls preload="metadata" playsinline style="aspect-ratio:${c.vertical?'9/16':'16/9'}"></video>
+    <div style="margin-top:6px" class="row between"><b style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.channel)}</b>
+      <span class="faint" style="font-size:12px">${ago(c.made)==='just now'?'just now':ago(c.made)+' ago'}</span></div>
+    <div style="font-size:12px;margin-top:2px">${c.requests?`<span class="tag" style="color:var(--acc);border-color:var(--acc)">CLIP REQUEST ×${c.requests}</span> `:''}<span class="mut">${c.score!=null?'score '+c.score+' · ':''}${esc(c.name)}</span></div>
+    <div class="t">${esc((c.top||[]).join(' · '))}</div>
+    <div class="row" style="margin-top:6px"><a class="btn sm" href="${c.video}?download=1">Download</a>
+      ${c.raw?`<a class="btn sm" href="${c.raw}?download=1">Raw</a>`:''}
+      <a class="btn sm" href="#sessions/${encodeURIComponent(c.session)}">Session ›</a></div></div>`}
+async function loadClips(more){
+  if(!more)clipOffset=0;
+  const qs=new URLSearchParams({channel:$('c-chan').value,sort:$('c-sort').value,requested:$('c-req').checked?'1':'0',offset:clipOffset,limit:48});
+  const r=await j('/api/clips?'+qs);if(r.error){toast(r.error);return}
+  const cs=$('c-chan'),cur=cs.value;
+  cs.innerHTML='<option value="">All channels</option>'+r.channels.map(c=>`<option ${c===cur?'selected':''}>${esc(c)}</option>`).join('');
+  $('c-total').textContent=`· ${r.total}`;
+  const html=r.clips.map(clipCard).join('');
+  if(more)$('c-grid').insertAdjacentHTML('beforeend',html);
+  else $('c-grid').innerHTML=html||'<div class="card empty" style="grid-column:1/-1">No clips yet — they appear here as jobs finish clipping.</div>';
+  clipOffset+=r.clips.length;$('c-more').hidden=clipOffset>=r.total;
+}
+for(const id of['c-chan','c-sort','c-req'])$(id).onchange=()=>loadClips(false);
+$('c-more').onclick=()=>loadClips(true);
 
 // ---------- settings
 async function loadSettings(){
@@ -437,7 +482,7 @@ async function tick(){
   }catch(e){}
 }
 function fromHash(){const h=location.hash.slice(1).split('/');curSession=h[1]||null;
-  show(['jobs','sessions','settings','system'].includes(h[0])?h[0]:'jobs')}
+  show(['jobs','clips','sessions','settings','system'].includes(h[0])?h[0]:'jobs')}
 addEventListener('hashchange',fromHash);fromHash();
 loadSettings();loadSystem().then(refreshJobs);refreshJobs();
 setInterval(tick,3000);setInterval(()=>{if(tab==='sessions'&&!curSession)loadSessions();if(tab==='system')loadSystem();else j('/api/system').then(s=>{if(!s.error){sysCache=s;permBanner(s)}})},20000);

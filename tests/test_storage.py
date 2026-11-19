@@ -84,6 +84,25 @@ class Storage(unittest.TestCase):
             mover.move_session(src_root / "20990101-0009-mv", dst_root, {"done": 0}, copy=True)
 
 
+class WaitForDrive(unittest.TestCase):
+    def test_waits_until_drive_mounts(self):
+        mnt = HOME / "late-mount"
+        mnt.mkdir()
+        cfg = {"storage": {"wait_for_drive_seconds": 30}}
+        clipper.CONFIG.write_text((clipper.ROOT / "config.example.toml").read_text().replace(
+            'sessions_dir = ""', f'sessions_dir = "{mnt / "rec"}"'))
+        t = threading.Timer(2, lambda: (mnt / "rec").mkdir())  # the "mount" shows up after 2 s
+        t.start()
+        t0 = time.time()
+        clipper.wait_for_storage(cfg)
+        self.assertGreaterEqual(time.time() - t0, 2)
+        clipper.CONFIG.write_text(clipper.CONFIG.read_text().replace(str(mnt / "rec"), str(mnt / "never")))
+        with self.assertRaises(clipper.StorageUnavailable):
+            clipper.wait_for_storage({"storage": {"wait_for_drive_seconds": 0}})
+        clipper.CONFIG.write_text((clipper.ROOT / "config.example.toml").read_text())
+        clipper.load_cfg()
+
+
 class StorageApi(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -2,7 +2,8 @@
 # The dashboard starts jobs as their own processes; they keep running if this service restarts.
 [Unit]
 Description=clipperyt dashboard
-After=network-online.target
+# wait for local + network mounts (recordings folder on a NAS/USB drive)
+After=network-online.target local-fs.target remote-fs.target
 Wants=network-online.target
 
 [Service]

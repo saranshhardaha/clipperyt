@@ -108,7 +108,7 @@ def live_spikes(session: Path, rec_start_ms: int, rows) -> int:
         return hit[1]
     try:
         cfg = clipper.load_cfg()["spikes"]
-        n = len(spikes.find_moments(sorted(rows), rec_start_ms, cfg))
+        n = len(spikes.find_all(sorted(rows), rec_start_ms, cfg))
     except Exception:
         n = 0
     _live_spikes[key] = (time.time(), n)

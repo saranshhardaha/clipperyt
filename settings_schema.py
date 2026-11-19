@@ -55,13 +55,26 @@ SCHEMA: list[dict] = [
     {"key": "spikes.hype_weight", "type": "float", "min": 0, "label": "Hype weight",
      "help": "Extra weight per hype message (0.5 → counts as 1.5)."},
 
+    {"key": "spikes.clip_requests", "type": "bool", "label": "Clip requests",
+     "help": "Also make a moment when enough different chatters ask for a clip, even if chat isn't louder."},
+    {"key": "spikes.clip_phrases", "type": "list", "label": "Clip phrases",
+     "help": "Whole words/phrases, any case. \"clip\" already covers \"clip it\", \"bhai clip karo\"…; \"eclipse\"/\"clips\" don't count."},
+    {"key": "spikes.clip_min_users", "type": "int", "min": 2, "label": "Different chatters needed",
+     "help": "Each chatter counts once, however often they type it."},
+    {"key": "spikes.clip_window_seconds", "type": "int", "min": 5, "label": "…within (s)"},
+    {"key": "spikes.clip_boost", "type": "float", "min": 0, "label": "Clip-request boost",
+     "help": "Score added per requesting chatter. A request during a chat spike adds to that spike's score."},
+
     # ---- clip
     {"key": "clip.stream_delay_seconds", "type": "float", "min": 0, "label": "Stream delay (s)",
      "help": "Viewers see the stream this late, so chat reacts late."},
     {"key": "clip.lead_seconds", "type": "float", "min": 0, "label": "Lead (s)",
      "help": "Start the clip this long before the delay-corrected spike."},
     {"key": "clip.length_seconds", "type": "float", "min": 5, "label": "Clip length (s)"},
-    {"key": "clip.max_clips", "type": "int", "min": 1, "label": "Max clips per stream", "help": "Keeps the top N by score."},
+    {"key": "clip.max_clips", "type": "int", "min": 1, "label": "Max clips per stream (per hour while live)",
+     "help": "Keeps the top N by score. With hourly clipping it applies to each hour, so a 24-hour stream isn't capped at N."},
+    {"key": "clip.process_every_minutes", "type": "int", "min": 0, "label": "Clip while live every (min)",
+     "help": "Long streams: make clips for the last hour every N minutes while recording continues. 0 = only when the stream ends."},
 
     # ---- captions
     {"key": "captions.enabled", "type": "bool", "label": "Captions"},
@@ -95,6 +108,10 @@ SCHEMA: list[dict] = [
     {"key": "storage.also_scan", "type": "list", "label": "Also list sessions from",
      "help": "Older recordings folders, still shown in Sessions. Filled in automatically when you change the "
              "recordings folder; remove one once it's empty."},
+
+    {"key": "storage.wait_for_drive_seconds", "type": "int", "min": 0, "label": "Wait for the drive (s)",
+     "help": "After a reboot, autostart jobs and One-link jobs wait up to this long for the recordings folder "
+             "(NAS/USB drives often mount late). Watch jobs keep retrying after that anyway."},
 
     # ---- limits
     {"key": "limits.max_parallel_processing", "type": "int", "min": 1, "label": "Clip jobs at once",
