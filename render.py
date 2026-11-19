@@ -92,12 +92,79 @@ def cut(stream: Path, start: float, length: float, out: Path) -> None:
          "-avoid_negative_ts", "make_zero", str(out)])
 
 
+def container_of(stream: Path) -> str:
+    """'ts' (MPEG-TS), 'mp4' (fragmented MP4 — Twitch Enhanced Broadcasting / HEVC, some
+    YouTube) or 'other', from the first bytes. Byte-slicing is only valid per container."""
+    with open(stream, "rb") as f:
+        head = f.read(4096)
+    if len(head) > 376 and head[0] == head[188] == head[376] == 0x47:
+        return "ts"
+    if any(b in head[:64] for b in (b"ftyp", b"styp", b"moof", b"moov")):
+        return "mp4"
+    return "other"
+
+
+def _box_at(f, pos: int, kind: bytes) -> int | None:
+    """Size of a `kind` box starting at file offset pos, if one is really there."""
+    f.seek(pos)
+    hdr = f.read(8)
+    if len(hdr) < 8 or hdr[4:8] != kind:
+        return None
+    size = int.from_bytes(hdr[:4], "big")
+    return size if size >= 8 else None
+
+
+def _moof_near(f, pos: int, total: int, forward: bool) -> int | None:
+    """Offset of a real moof box (followed by mdat) at/before pos, or at/after pos if forward."""
+    win = 8 << 20
+    cur = pos
+    while 0 <= cur <= total:
+        lo = cur if forward else max(0, cur - win)
+        f.seek(lo)
+        buf = f.read(win + 8)
+        idxs = []
+        i = buf.find(b"moof")
+        while i != -1:
+            idxs.append(lo + i - 4)
+            i = buf.find(b"moof", i + 1)
+        for box in (idxs if forward else reversed(idxs)):
+            if box < 0 or (forward and box < pos) or (not forward and box > pos):
+                continue
+            size = _box_at(f, box, b"moof")
+            if size and _box_at(f, box + size, b"mdat"):
+                return box
+        if forward:
+            if lo + win >= total:
+                return None
+            cur = lo + win
+        else:
+            if lo == 0:
+                return None
+            cur = lo
+    return None
+
+
+def _copy_range(src, dst, start: int, end: int) -> None:
+    src.seek(start)
+    left = end - start
+    while left > 0:
+        chunk = src.read(min(left, 8 << 20))
+        if not chunk:
+            break
+        dst.write(chunk)
+        left -= len(chunk)
+
+
 def cut_wallclock(stream: Path, timeline: Path, wall_start: float, length: float, out: Path) -> None:
     """Cut by real time using timeline.tsv (wall clock → bytes written so far).
 
     If parts of the stream never reached the file (Twitch ads skipped, network
     stalls), plain `-ss` seeking drifts out of sync with chat. Mapping wall-clock
     time to byte offsets doesn't: a gap just means the size didn't grow.
+
+    MPEG-TS can be sliced at any 188-byte packet. Fragmented MP4 is sliced at a
+    moof (fragment) boundary with the file's init header (ftyp+moov) put in front.
+    If slicing still fails, fall back to a plain -ss cut of the whole file.
     """
     pts = []
     for line in timeline.read_text().splitlines():
@@ -110,22 +177,31 @@ def cut_wallclock(stream: Path, timeline: Path, wall_start: float, length: float
     before = [b for t, b in pts if t <= wall_start]
     start_b = before[-1] if before else 0          # segment boundary → starts on a keyframe
     after = [b for t, b in pts if t >= wall_start + length]
-    end_b = after[0] if after else total
-    start_b -= start_b % 188                         # align to MPEG-TS packets
+    end_b = min(after[0] if after else total, total)
     if end_b - start_b < 188 * 100:
         raise RuntimeError("nothing recorded at that time (inside a skipped ad?)")
-    piece = out.with_suffix(".part.ts")
-    with open(stream, "rb") as src, open(piece, "wb") as dst:
-        src.seek(start_b)
-        left = end_b - start_b
-        while left > 0:
-            chunk = src.read(min(left, 8 << 20))
-            if not chunk:
-                break
-            dst.write(chunk)
-            left -= len(chunk)
+    kind = container_of(stream)
+    piece = out.with_suffix(".part.mp4" if kind == "mp4" else ".part.ts")
     try:
+        with open(stream, "rb") as src, open(piece, "wb") as dst:
+            if kind == "mp4":
+                first = _moof_near(src, 0, total, forward=True)
+                if first is None:
+                    raise RuntimeError("no fragments (moof) in the recording")
+                s0 = _moof_near(src, max(start_b, first), total, forward=False) or first
+                e0 = _moof_near(src, end_b, total, forward=True) or total
+                _copy_range(src, dst, 0, first)        # ftyp + moov (init segment)
+                _copy_range(src, dst, s0, e0)
+            else:
+                start_b -= start_b % 188               # align to MPEG-TS packets
+                _copy_range(src, dst, start_b, end_b)
         cut(piece, 0, length, out)
+    except Exception as e:
+        # last resort: seek in the whole file (exact unless the recording has gaps before this point)
+        t0 = pts[0][0]
+        print(f"    ! byte-slice cut failed ({kind}: {str(e).splitlines()[-1][:120]}) — "
+              f"falling back to a plain seek", flush=True)
+        cut(stream, max(0.0, wall_start - t0), length, out)
     finally:
         piece.unlink(missing_ok=True)
 

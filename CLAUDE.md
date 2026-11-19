@@ -8,7 +8,7 @@ Records a YouTube / Twitch / Kick live stream and its chat with no accounts or A
   - `watch`: loop on the default channels in config.toml. `run <url>`: one stream. Both are terminal runs and use `HOME/state.json`.
   - `process <session>` / `spikes <session>` / `status` / `doctor` (tool check, run by the setup scripts)
   - `HOME` = `$CLIPPER_HOME` or the repo, and holds config.toml, sessions/, jobs/, logs/ and locks/. `ROOT` = the code, models/ and bin/.
-  - Session folders are `YYYYMMDD-HHMM-<channel-slug>[-vod][-N]` and always unique (`new_session_dir`). Recording waits in `sessions/_waiting-<job>`, which is renamed onto the reserved empty folder.
+  - Session folders are `YYYYMMDD-HHMM-<channel-slug>[-vod][-N]` and always unique (`new_session_dir`). Recording starts inside `<recordings>/<channel>/` (a session folder with a `.waiting` marker, hidden until meta.json exists), so no folder ever moves to another parent (NAS shares refuse that).
   - `processing_slot(n)`: flock on `locks/process-N.lock` so at most `[limits] max_parallel_processing` sessions are clipped at once. Recording is never limited.
   - PATH gets the venv bin, `bin/` and Homebrew's keg-only `ffmpeg-full` (plain Homebrew ffmpeg 8+ has no libass).
 - `chat_youtube.py`: live chat via YouTube's chat-popout innertube endpoint (`youtubei/v1/live_chat/get_live_chat`), stdlib only. `actions_to_rows()` is shared with replay parsing.
@@ -20,6 +20,8 @@ Records a YouTube / Twitch / Kick live stream and its chat with no accounts or A
   - With no libass, `render()` drops the subs and warns instead of failing.
   - Encoder `auto` = videotoolbox → nvenc → libx264.
   - `cut_wallclock()` cuts by wall-clock time through `timeline.tsv` (epoch_ms → file bytes, sampled every 1 s), so gaps from skipped Twitch ads or stalls don't desync clips.
+    - `container_of()` picks how to slice. MPEG-TS is cut at a 188-byte packet. Fragmented MP4 (Twitch Enhanced Broadcasting / HEVC; streamlink still names it `.ts`) is cut at a `moof` boundary, with the init header (ftyp+moov) put in front.
+    - If either fails, it falls back to a plain `-ss` cut of the whole file. Before this, fMP4 clips failed with "Invalid data found when processing input".
 - `server.py`: stdlib dashboard and JSON API on :8787 (`CLIPPER_TOKEN`).
   - It starts each job detached (`start_new_session`, plus `caffeinate -is` on macOS), and jobs survive dashboard restarts. Jobs with `autostart` start on boot.
   - Routes: `/api/jobs`, `/api/sessions`, `/api/settings` and `/api/system`.

@@ -55,5 +55,57 @@ class Formats(unittest.TestCase):
                 self.assertGreater(top_row_mean(out), 20, fmt)
 
 
+def duration(p: Path) -> float:
+    return float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                                 str(p)], capture_output=True, text=True).stdout.strip() or 0)
+
+
+def first_frame_luma(p: Path) -> float:
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(p), "-frames:v", "1", "-vf", "scale=32:18,format=gray",
+                          "-f", "rawvideo", "-"], capture_output=True).stdout
+    return sum(raw) / max(1, len(raw))
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class WallclockCut(unittest.TestCase):
+    """cut_wallclock on MPEG-TS and fragmented MP4 (Twitch Enhanced Broadcasting / HEVC)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Path(tempfile.mkdtemp())
+        # brightness ramps 0→1 over 20 s, so the first frame tells where a clip starts
+        src = ["-f", "lavfi", "-i", "color=c=white:s=320x180:r=25:d=20,fade=in:st=0:d=20",
+               "-f", "lavfi", "-i", "sine=d=20", "-shortest", "-c:v", "libx264", "-g", "25",
+               "-pix_fmt", "yuv420p", "-c:a", "aac"]
+        subprocess.run(["ffmpeg", "-v", "error", *src, "-f", "mpegts", str(cls.d / "rec.ts")], check=True)
+        subprocess.run(["ffmpeg", "-v", "error", *src, "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+                        "-frag_duration", "1000000", "-f", "mp4", str(cls.d / "rec_frag.ts")], check=True)
+        subprocess.run(["ffmpeg", "-v", "error", *src, "-f", "mp4", str(cls.d / "rec_plain.mp4")], check=True)
+
+    def timeline(self, f: Path) -> Path:
+        n = f.stat().st_size
+        tl = self.d / (f.name + ".tl")
+        tl.write_text("".join(f"{1_800_000_000_000 + i * 1000}\t{n * i // 20}\n" for i in range(21)))
+        return tl
+
+    def check(self, name: str, kind: str):
+        f = self.d / name
+        self.assertEqual(render.container_of(f), kind)
+        early, mid = self.d / f"{name}.early.mp4", self.d / f"{name}.mid.mp4"
+        render.cut_wallclock(f, self.timeline(f), 1_800_000_000 + 1, 4, early)
+        render.cut_wallclock(f, self.timeline(f), 1_800_000_000 + 12, 4, mid)
+        self.assertAlmostEqual(duration(mid), 4, delta=1.2)
+        self.assertGreater(first_frame_luma(mid), first_frame_luma(early) + 60)  # really from the middle
+
+    def test_ts(self):
+        self.check("rec.ts", "ts")
+
+    def test_fragmented_mp4(self):
+        self.check("rec_frag.ts", "mp4")  # streamlink names it .ts whatever the container
+
+    def test_plain_mp4_falls_back(self):
+        self.check("rec_plain.mp4", "mp4")
+
+
 if __name__ == "__main__":
     unittest.main()
