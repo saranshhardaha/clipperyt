@@ -1,6 +1,7 @@
 """Cut clips, transcribe them with whisper.cpp, render captioned Shorts."""
 from __future__ import annotations
 
+import json
 import re
 import sys
 import subprocess
@@ -206,8 +207,111 @@ def cut_wallclock(stream: Path, timeline: Path, wall_start: float, length: float
         piece.unlink(missing_ok=True)
 
 
+_WHISPER_HELP: dict[str, str] = {}
+
+
+def _whisper_supports(wbin: str, flag: str) -> bool:
+    """Does this whisper-cli build know `flag`? (setup_linux.sh builds its own; old builds lack some.)"""
+    if wbin not in _WHISPER_HELP:
+        try:
+            r = subprocess.run([wbin, "--help"], capture_output=True, text=True, timeout=30)
+            _WHISPER_HELP[wbin] = r.stdout + r.stderr
+        except (OSError, subprocess.TimeoutExpired):
+            _WHISPER_HELP[wbin] = ""
+    return flag in _WHISPER_HELP[wbin]
+
+
+def dtw_preset(model: Path) -> str | None:
+    """whisper.cpp --dtw preset for a ggml model file name (token-level timestamps)."""
+    n = model.name.lower()
+    for key, preset in (("large-v3-turbo", "large.v3.turbo"), ("large-v3", "large.v3"), ("large-v2", "large.v2"),
+                        ("large-v1", "large.v1"), ("medium.en", "medium.en"), ("medium", "medium"),
+                        ("small.en", "small.en"), ("small", "small"), ("base.en", "base.en"), ("base", "base"),
+                        ("tiny.en", "tiny.en"), ("tiny", "tiny")):
+        if key in n:
+            return preset
+    return None
+
+
+def _srt_time(t: float) -> str:
+    ms = int(round(max(0.0, t) * 1000))
+    return f"{ms // 3600000:02d}:{ms % 3600000 // 60000:02d}:{ms % 60000 // 1000:02d},{ms % 1000:03d}"
+
+
+def words_to_cues(words: list[tuple[str, float]], max_words: int = 5, max_chars: int = 28,
+                  gap: float = 1.0, hold: float = 0.6) -> list[tuple[float, float, str]]:
+    """Short captions from timed words: each cue starts at its first word and ends just after its
+    last word (or when the next cue starts) — never shown during the silence before speech."""
+    cues: list[list] = []
+    for w, t in words:
+        if not w:
+            continue
+        last = cues[-1] if cues else None
+        new = (last is None or len(last[2]) >= max_words or len(" ".join(last[2]) + " " + w) > max_chars
+               or t - last[1] > gap or re.search(r"[.!?।,]$", last[2][-1]))
+        if new:
+            cues.append([t, t, [w]])
+        else:
+            last[1] = t
+            last[2].append(w)
+    # a lone word right after a cue (e.g. "है") joins it instead of flashing on its own
+    merged: list[list] = []
+    for c in cues:
+        p = merged[-1] if merged else None
+        if (p and len(c[2]) == 1 and c[0] - p[1] < 0.6 and not re.search(r"[.!?।]$", p[2][-1])
+                and len(" ".join(p[2] + c[2])) <= max_chars + 6):
+            p[1] = c[1]
+            p[2] += c[2]
+        else:
+            merged.append(c)
+    cues = merged
+    out = []
+    for i, (a, b, ws) in enumerate(cues):
+        start = max(0.0, a - 0.05)
+        end = b + hold
+        if i + 1 < len(cues):
+            end = min(end, cues[i + 1][0] - 0.05)
+        out.append((start, max(end, start + 0.4), " ".join(ws)))
+    return out
+
+
+def silences(wav: Path, noise_db: int = -35, min_len: float = 0.4) -> list[tuple[float, float]]:
+    """Silent stretches (start, end) via ffmpeg silencedetect."""
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(wav), "-af",
+                        f"silencedetect=n={noise_db}dB:d={min_len}", "-f", "null", "-"],
+                       capture_output=True, text=True)
+    out, start = [], None
+    for m in re.finditer(r"silence_(start|end): (-?[\d.]+)", r.stderr):
+        if m[1] == "start":
+            start = float(m[2])
+        elif start is not None:
+            out.append((max(0.0, start), float(m[2])))
+            start = None
+    if start is not None:
+        out.append((start, 1e9))
+    return out
+
+
+def trim_to_speech(segs: list[tuple[float, float, str]], quiet: list[tuple[float, float]]) -> list[tuple[float, float, str]]:
+    """Fallback when word times aren't available: don't start (or end) a caption inside silence."""
+    out = []
+    for a, b, text in segs:
+        for qa, qb in quiet:
+            # whisper often starts a segment a moment before the silence it then sits in
+            if qa - 0.3 <= a < qb < b:
+                a = qb
+            elif qa <= a < qb:
+                a = min(qb, b)
+            if qa < b <= qb:
+                b = max(qa, a)
+        if b - a >= 0.2:
+            out.append((a, b, text))
+    return out
+
+
 def transcribe(clip: Path, out_srt: Path, cfg: dict, root: Path) -> bool:
-    """whisper.cpp → .srt. Returns False (and leaves no srt) if whisper isn't set up."""
+    """whisper.cpp → .srt with captions timed to the words (not to whisper's long segments,
+    which start during the silence before speech). Returns False if whisper isn't set up."""
     model = Path(cfg["model"])
     model = model if model.is_absolute() else root / model
     if not model.exists():
@@ -219,15 +323,48 @@ def transcribe(clip: Path, out_srt: Path, cfg: dict, root: Path) -> bool:
     wbin = cfg.get("whisper_bin", "whisper-cli")
     if wbin == "whisper-cli" and (root / "bin" / "whisper-cli").exists():
         wbin = str(root / "bin" / "whisper-cli")  # built by setup_linux.sh
-    cmd = [wbin, "-m", str(model), "-f", str(wav),
-           "-l", cfg.get("language", "hi"), "-osrt", "-of", str(out_srt.with_suffix("")),
-           "-np", "-ml", "42", "-sow"]
+    base = out_srt.with_suffix("")
+    js = base.with_suffix(".json")
+    cmd = [wbin, "-m", str(model), "-f", str(wav), "-l", cfg.get("language", "hi"), "-ojf", "-of", str(base), "-np"]
+    preset = dtw_preset(model)
+    use_dtw = bool(preset) and _whisper_supports(wbin, "--dtw")
+    if use_dtw:
+        cmd += ["--dtw", preset]
+        if _whisper_supports(wbin, "--no-flash-attn"):
+            cmd.append("-nfa")  # DTW timestamps are empty with flash attention on
     if cfg.get("translate"):
         cmd.append("-tr")
     try:
         run(cmd)
+        data = json.loads(js.read_text(encoding="utf-8", errors="replace"))
+        segs = data.get("transcription", [])
+        words: list[tuple[str, float]] = []
+        for seg in segs:
+            cur = None
+            for t in seg.get("tokens", []):
+                txt = t.get("text", "")
+                if txt.startswith("[_") or txt.startswith("<|"):
+                    continue
+                when = t.get("t_dtw", -1)
+                if txt.startswith(" ") or cur is None:
+                    cur = [txt.strip(), when / 100 if when is not None and when >= 0 else None]
+                    words.append(cur)
+                else:
+                    cur[0] += txt
+        timed = words and all(w[1] is not None for w in words)
+        if timed:
+            cues = words_to_cues([(w, t) for w, t in words])
+            how = "word-timed"
+        else:  # no DTW: whisper's segments, trimmed so they don't start in silence
+            cues = trim_to_speech([(s["offsets"]["from"] / 1000, s["offsets"]["to"] / 1000, s["text"].strip())
+                                   for s in segs if s.get("text", "").strip()], silences(wav))
+            how = "segment-timed, trimmed to speech"
+        out_srt.write_text("".join(f"{i}\n{_srt_time(a)} --> {_srt_time(b)}\n{text}\n\n"
+                                   for i, (a, b, text) in enumerate(cues, 1)), encoding="utf-8")
+        print(f"    captions: {len(cues)} cues ({how})", flush=True)
     finally:
         wav.unlink(missing_ok=True)
+        js.unlink(missing_ok=True)
     return out_srt.exists()
 
 
