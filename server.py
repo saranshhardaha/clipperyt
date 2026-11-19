@@ -373,9 +373,13 @@ def all_clips(channel: str = "", requested: bool = False, sort: str = "stream",
         items.sort(key=lambda x: x["made"], reverse=True)
     else:  # review order: newest session first, clips in stream order inside it
         items.sort(key=lambda x: (x["session"], -x["start"]), reverse=True)
-    cfg = clipper.load_cfg()["titles"]
     return {"total": len(items), "clips": items[offset: offset + limit], "channels": sorted(chans),
-            "counts": counts, "ai_ready": bool(cfg.get("openrouter_api_key") or os.environ.get("OPENROUTER_API_KEY"))}
+            "counts": counts, "ai_ready": ai_ready()}
+
+
+def ai_ready() -> bool:
+    cfg = clipper.load_cfg()["titles"]
+    return bool(cfg.get("openrouter_api_key") or os.environ.get("OPENROUTER_API_KEY"))
 
 
 # ------------------------------------------------------------------ YouTube posting
@@ -427,22 +431,28 @@ def yt_status() -> dict:
         c = d / "clips" / i["name"] if d else None
         final = next((c / f for f in ("short.mp4", "captioned.mp4") if c and (c / f).exists()), None)
         try:
-            ch = json.loads((d / "meta.json").read_text()).get("channel", "?") if d else "?"
+            meta = json.loads((d / "meta.json").read_text()) if d else {}
         except Exception:
-            ch = "?"
+            meta = {}
+        ch = meta.get("channel", "?")
         t = titles.cached(c) if c else None
+        r = review.get(c) if c else {}
+        tags = [x for x in ((t or {}).get("hashtags") or []) if x]
+        ai_desc = (t or {}).get("description")
         items.append({**i, "channel": ch, "label": youtube.local_label(cfg, i["at"]), "day": youtube.local_day(cfg, i["at"]),
                       "time": youtube.local_time(cfg, i["at"]), "video": f"/files/{i['sid']}/clips/{i['name']}/{final.name}" if final else None,
                       "vertical": bool(final and final.name == "short.mp4"),
                       "title": i.get("title") or review.get(c).get("title") if c else i.get("title"),
-                      "suggested": (t or {}).get("titles") or [], "upload": UPLOADS.get(i["key"])})
+                      "suggested": (t or {}).get("titles") or [], "upload": UPLOADS.get(i["key"]),
+                      "streamer": streamer_of(meta), "ai_description": ai_desc, "custom_description": bool(r.get("description")),
+                      "description": with_credit(r.get("description") or ai_desc or default_description(meta, tags), meta)})
     hist = [{**h, "label": youtube.local_label(cfg, h["posted_at"])} for h in q["history"][:15]]
     return {"configured": configured, "connected": bool(tok.get("refresh_token")),
             "channel": tok.get("channel_title"), "error": YT["error"], "privacy": cfg.get("privacy") or "public",
             "pending": {"user_code": p["user_code"], "url": p["verification_url"],
                         "left": max(0, int(p["expires_at"] - time.time()))} if p else None,
             "next_slot": nxt, "scheduled": sched, "uploads": UPLOADS, "queue": items, "paused": q["paused"],
-            "history": hist, "plan": {"per_day": cfg.get("slots_per_day", 4), "gap": cfg.get("slot_gap_hours", 3),
+            "history": hist, "ai_ready": ai_ready(), "plan": {"per_day": cfg.get("slots_per_day", 4), "gap": cfg.get("slot_gap_hours", 3),
                                       "start": cfg.get("window_start", "10:00"), "end": cfg.get("window_end", "22:00"),
                                       "tz": cfg.get("timezone", "Asia/Kolkata")}}
 
@@ -481,16 +491,36 @@ def yt_connect() -> dict:
     return yt_status()
 
 
+def streamer_of(meta: dict) -> dict:
+    """Who the clip is from: the name plus every platform it streams on (simulcast)."""
+    chans = meta.get("chat_from") or {meta.get("platform", ""): meta.get("channel", "")}
+    return {"name": str(meta.get("channel") or "").lstrip("@") or "the streamer",
+            "platforms": [titles.NAMES.get(p, p) for p in chans if p]}
+
+
+def default_description(meta: dict, tags: list[str]) -> str:
+    return titles.credit_description(meta) + "\n\n" + " ".join("#" + x for x in tags + ["Shorts"])
+
+
+def with_credit(desc: str, meta: dict) -> str:
+    """Keep the streamer credit in any description, however it was edited."""
+    desc = desc.strip()
+    who = streamer_of(meta)["name"]
+    if f"@{who}".lower() not in desc.lower():
+        desc = titles.credit_description(meta) + ("\n\n" + desc if desc else "")
+    if "#shorts" not in desc.lower():
+        desc += " #Shorts"
+    return desc[:4900]
+
+
 def _clip_title_desc(d: Path, c: Path, title: str | None) -> tuple[str, str, list[str]]:
     meta = json.loads((d / "meta.json").read_text())
     t = titles.cached(c) or {}
     r = review.get(c)
     title = (title or r.get("title") or (t.get("titles") or [None])[0] or f"{meta.get('channel', 'Stream')} clip").strip()
     tags = [x for x in (t.get("hashtags") or []) if x]
-    desc = t.get("description") or (titles.credit_description(meta) + "\n\n" + " ".join("#" + x for x in tags + ["Shorts"]))
-    if "#Shorts" not in desc:
-        desc += " #Shorts"
-    return title, desc, tags + [str(meta.get("channel", "")).lstrip("@"), "Shorts"]
+    desc = with_credit(r.get("description") or t.get("description") or default_description(meta, tags), meta)
+    return title, desc, tags + [streamer_of(meta)["name"], "Shorts"]
 
 
 def yt_worker() -> None:
@@ -652,6 +682,14 @@ def queue_action(data: dict) -> tuple[int, dict]:
             it["title"] = str(data.get("title") or "").strip()[:100] or None
             save_queue(q)
             return 200, {"result": "Title saved"}
+        if act == "description":
+            sid, name = key.split("/", 1)
+            c = _clip_dir(sid, name)
+            if not c:
+                return 404, {"error": "no such clip"}
+            text = str(data.get("description") or "").strip()[:4900] or None
+            review.put(c, review.get(c)["state"], description=text)
+            return 200, {"result": "Description saved" if text else "Description reset"}
         if act == "move":  # swap times with the neighbour, so the order changes but the slots don't
             waiting = [i for i in q["items"] if i["status"] == "waiting"]
             if it not in waiting:

@@ -171,6 +171,15 @@ nav .badge.q{background:var(--rule2);color:var(--ink)}
 .sq .info{min-width:0;display:flex;flex-direction:column;gap:5px}
 .sq .who{font-size:13px;color:var(--mute)}
 .sq .info input{font-weight:600}
+.sq .who b{color:var(--ink);font-weight:600}
+.sq .pick{display:flex;flex-wrap:wrap;gap:6px}
+.sq .pick button{font-size:12.5px;padding:3px 10px;border-radius:999px;font-weight:400;text-align:left;white-space:normal;max-width:100%;color:var(--mute)}
+.sq .pick button[aria-pressed="true"]{color:var(--ink);border-color:var(--cue);box-shadow:inset 0 0 0 1px var(--cue)}
+.sq .pick .lbl{font-size:12.5px;color:var(--faint);align-self:center}
+.sq details.desc>summary{font-size:13px;color:var(--mute);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;list-style-position:inside}
+.sq details.desc>summary span{color:var(--faint)}
+.sq details.desc textarea{min-height:120px;resize:vertical;font-size:13px;line-height:1.45;margin-top:6px}
+.sq details.desc .row{margin-top:6px;font-size:12.5px;color:var(--faint);flex-wrap:wrap}
 .sq .btns{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 .sq-note{background:var(--panel2);border-radius:8px;padding:10px 12px;margin-top:12px;font-size:13.5px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
 .sq-note.warn{box-shadow:inset 3px 0 0 var(--standby)}.sq-note.bad{box-shadow:inset 3px 0 0 var(--bad)}
@@ -997,8 +1006,8 @@ let schedSig='';
 function renderSched(){
   const el=$('sched');if(!el)return;
   if(!yt){el.innerHTML='<div class="card mut">Loading…</div>';return}
-  if(el.contains(document.activeElement)&&document.activeElement.tagName==='INPUT')return;  // don't wipe a title being typed
-  const q=yt.queue||[],sig=JSON.stringify([q.map(i=>[i.key,i.at,i.status,i.error,i.title]),yt.paused,yt.connected,yt.configured,yt.channel,yt.pending&&yt.pending.user_code,yt.error,(yt.history||[]).map(h=>h.key),(yt.scheduled||[]).map(x=>x.key),yt.next_slot]);
+  if(el.contains(document.activeElement)&&/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName))return;  // don't wipe text being typed
+  const q=yt.queue||[],sig=JSON.stringify([q.map(i=>[i.key,i.at,i.status,i.error,i.title,i.suggested,i.description,i.custom_description]),yt.ai_ready,yt.paused,yt.connected,yt.configured,yt.channel,yt.pending&&yt.pending.user_code,yt.error,(yt.history||[]).map(h=>h.key),(yt.scheduled||[]).map(x=>x.key),yt.next_slot]);
   if(sig===schedSig)return;schedSig=sig;
   const p=yt.plan||{};let day='';
   const rows=q.map((i,n)=>{
@@ -1008,10 +1017,7 @@ function renderSched(){
     return head+`<div class="sq ${cls}" data-sq="${esc(i.key)}">
       <span class="tm">${esc(i.time)}</span>
       ${i.video?`<video src="${i.video}#t=0.5" class="${i.vertical?'':'wide'}" preload="metadata" playsinline title="Play or pause" data-sqplay></video>`:'<span class="faint">no video</span>'}
-      <div class="info"><span class="who">${esc(i.channel)} · ${esc(clipTime(i.name))}${i.status==='error'?` · <span class="err">failed: ${esc(i.error||'')}</span>`:''}</span>
-        <input data-sqt="${esc(i.key)}" value="${esc(i.title||'')}" placeholder="${esc((i.suggested||[])[0]||'Title for the Short')}" maxlength="100" ${i.suggested&&i.suggested.length?`list="sqs-${n}"`:''} aria-label="Title">
-        ${i.suggested&&i.suggested.length?`<datalist id="sqs-${n}">${i.suggested.map(t=>`<option value="${esc(t)}">`).join('')}</datalist>`:''}
-        <div data-ytp="${esc(i.key)}">${ytProg(i.key)}</div></div>
+      <div class="info">${sqInfo(i)}<div data-ytp="${esc(i.key)}">${ytProg(i.key)}</div></div>
       <div class="btns">${i.status==='waiting'?`<button class="sm quiet" data-sqa="move" data-dir="-1" ${wi>0?'':'disabled'} aria-label="Earlier">↑</button><button class="sm quiet" data-sqa="move" data-dir="1" ${wi<waiting.length-1?'':'disabled'} aria-label="Later">↓</button>`:''}
         ${i.status==='error'?'<button class="sm pri" data-sqa="retry">Retry now</button>':i.status==='waiting'?'<button class="sm" data-sqa="post-now">Post now</button>':''}
         ${i.status!=='uploading'?'<button class="sm quiet bad" data-sqa="remove">Remove</button>':''}</div></div>`}).join('');
@@ -1027,18 +1033,43 @@ function renderSched(){
     ${(yt.scheduled||[]).length?`<div class="card"><h2>Uploaded, going public later</h2><div class="sq-h">${yt.scheduled.map(x=>`<div class="row between"><span>${esc(x.label)} · ${esc(x.channel)} · ${esc(x.title||clipTime(x.name))}</span>
       <span class="row" style="flex:none">${x.url?`<a class="btn sm" href="${esc(x.url)}" target="_blank" rel="noopener">Open</a>`:''}<button class="sm quiet" data-yt="unschedule" data-key="${esc(x.key)}">Unschedule</button></span></div>`).join('')}</div></div>`:''}
     ${(yt.history||[]).length?`<div class="card"><h2>Posted</h2><div class="sq-h">${yt.history.map(h=>`<div class="row between"><span>${esc(h.label)} · ${esc(h.title||h.key)}</span>${h.url?`<a class="btn sm" href="${esc(h.url)}" target="_blank" rel="noopener">Open</a>`:''}</div>`).join('')}</div></div>`:''}`}
+function sqStreamer(i){const s=i.streamer||{name:i.channel,platforms:[]};
+  return `<b>@${esc(s.name)}</b>${s.platforms&&s.platforms.length?` on ${esc(s.platforms.join(' + '))}`:''}`}
+function sqInfo(i){
+  const sug=i.suggested||[],used=i.title||sug[0]||'',busy=i.status==='uploading';
+  const pick=sug.length?`<div class="pick" role="group" aria-label="AI titles"><span class="lbl">AI titles</span>${sug.map(t=>`<button type="button" data-sqpick="${esc(t)}" aria-pressed="${t===used}" ${busy?'disabled':''}>${esc(t)}</button>`).join('')}
+      ${yt.ai_ready&&!busy?`<button type="button" class="quiet" data-sqai="1" title="Ask the AI for new titles and a new description">Suggest again</button>`:''}</div>`
+    :yt.ai_ready?`<div class="pick"><button type="button" data-sqai="1" ${busy?'disabled':''}>Suggest titles with AI</button></div>`
+    :`<div class="pick"><span class="lbl">For AI titles, add an OpenRouter key in <a href="#" data-sqgo="titles">Settings → Titles</a>.</span></div>`;
+  const first=(i.description||'').split('\n')[0];
+  const desc=`<details class="desc" ${sqOpen.has(i.key)?'open':''} data-sqdesc="${esc(i.key)}"><summary>Description <span>${i.custom_description?'(edited)':i.ai_description?'(AI)':''} ${esc(first)}</span></summary>
+      <textarea data-sqd="${esc(i.key)}" maxlength="4900" aria-label="Description" ${busy?'disabled':''}>${esc(i.description||'')}</textarea>
+      <div class="row between"><span>The credit to @${esc((i.streamer||{}).name||i.channel)} and #Shorts are always kept.</span>
+        ${i.custom_description&&!busy?`<button class="sm quiet" data-sqa="desc-reset">${i.ai_description?'Use AI description':'Reset'}</button>`:''}</div></details>`;
+  return `<span class="who">${sqStreamer(i)} · ${esc(clipTime(i.name))}${i.status==='error'?` · <span class="err">failed: ${esc(i.error||'')}</span>`:''}</span>
+    <input data-sqt="${esc(i.key)}" value="${esc(i.title||'')}" placeholder="${esc(sug[0]||'Title for the Short')}" maxlength="100" aria-label="Title" ${busy?'disabled':''}>
+    ${pick}${desc}`}
+const sqOpen=new Set();
+$('sched').addEventListener('toggle',e=>{const d=e.target.closest&&e.target.closest('[data-sqdesc]');if(!d)return;d.open?sqOpen.add(d.dataset.sqdesc):sqOpen.delete(d.dataset.sqdesc)},true);
 $('sched').addEventListener('click',async e=>{
   const v=e.target.closest('[data-sqplay]');if(v){v.paused?v.play():v.pause();return}
-  const g=e.target.closest('[data-sqgo]');if(g){e.preventDefault();sgroup='youtube';setPref('sgroup','youtube');show('settings');return}
+  const pk=e.target.closest('[data-sqpick]');if(pk){const key=pk.closest('[data-sq]').dataset.sq,t=pk.dataset.sqpick;
+    const r=await post('/api/youtube/queue',{action:'title',key,title:t});toast(r.error||'Title picked');schedSig='';loadYT();return}
+  const ai=e.target.closest('[data-sqai]');if(ai){const key=ai.closest('[data-sq]').dataset.sq,[sid,name]=key.split('/');
+    const r=await post(`/api/sessions/${sid}/clips/${name}/titles`,{});if(r.error)toast(r.error);else{rememberTitles([{name,titles:r}],sid);toast('New titles ready: pick one')}
+    schedSig='';loadYT();return}
+  const g=e.target.closest('[data-sqgo]');if(g){e.preventDefault();const gr=g.dataset.sqgo==='titles'?'titles':'youtube';sgroup=gr;setPref('sgroup',gr);show('settings');return}
   const b=e.target.closest('[data-sqa]');if(!b)return;
   const act=b.dataset.sqa,row=b.closest('[data-sq]'),key=row?row.dataset.sq:'';
   if(act==='post-now'&&!await ask('Post to YouTube now?','This clip goes up now instead of at its scheduled time.','Post now'))return;
   const body={action:act,key};
-  if(act==='move')body.dir=+b.dataset.dir;if(act==='pause')body.paused=!yt.paused;
+  if(act==='move')body.dir=+b.dataset.dir;if(act==='pause')body.paused=!yt.paused;if(act==='desc-reset'){body.action='description';body.description=''}
   if(act==='post-now'||act==='retry'){const t=row.querySelector('[data-sqt]');if(t&&t.value.trim())await post('/api/youtube/queue',{action:'title',key,title:t.value.trim()})}
   const r=await post('/api/youtube/queue',body);if(r.error||act!=='move')toast(r.error||r.result);
   schedSig='';await loadYT();refreshAttention()});
 $('sched').addEventListener('change',async e=>{
+  const d=e.target.closest('[data-sqd]');
+  if(d){const r=await post('/api/youtube/queue',{action:'description',key:d.dataset.sqd,description:d.value});toast(r.error||r.result);d.blur();schedSig='';loadYT();return}
   const t=e.target.closest('[data-sqt]');if(!t)return;
   const r=await post('/api/youtube/queue',{action:'title',key:t.dataset.sqt,title:t.value.trim()});
   toast(r.error||'Title saved');t.blur();schedSig='';loadYT()});

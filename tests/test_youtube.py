@@ -217,6 +217,23 @@ class Posting(unittest.TestCase):
         self.assertEqual([i["name"] for i in q], ["02_00-05-00", "03_00-09-00"])
         self.assertGreater(q[1]["at"], q[0]["at"])
         self.assertEqual(q[0]["title"], "Queued title")
+        # each row shows the streamer, the AI titles and the description that will be posted
+        self.assertEqual(q[0]["streamer"], {"name": "SpeedyGamer", "platforms": ["YouTube"]})
+        self.assertEqual(q[0]["suggested"], ["Bhai ne police ko chakma de diya"])
+        self.assertEqual((q[0]["ai_description"], q[0]["custom_description"]), ("desc #GTA5", False))
+        self.assertIn("@SpeedyGamer", q[0]["description"])                     # credit added to the AI text
+        self.assertIn("desc #GTA5", q[0]["description"])
+        self.assertIn("#Shorts", q[0]["description"])
+        key2 = f"{sid}/02_00-05-00"
+        self.assertEqual(call(self.port, "/api/youtube/queue",
+                              {"action": "description", "key": key2, "description": "Full chase, no cuts"})[0], 200)
+        q = call(self.port, "/api/youtube")[1]["queue"]
+        self.assertTrue(q[0]["custom_description"])
+        d = server._clip_title_desc(self.s, self.clips[1], None)[1]
+        self.assertTrue(d.startswith("Clip from @SpeedyGamer"), d)              # credit can't be edited away
+        self.assertIn("Full chase, no cuts", d)
+        call(self.port, "/api/youtube/queue", {"action": "description", "key": key2, "description": ""})
+        self.assertFalse(call(self.port, "/api/youtube")[1]["queue"][0]["custom_description"])
         self.assertEqual(len(G["uploads"]), 1)                                  # only the Post now one
         self.assertEqual(call(self.port, f"/api/sessions/{sid}/clips/02_00-05-00/schedule", {})[0], 400)
 
