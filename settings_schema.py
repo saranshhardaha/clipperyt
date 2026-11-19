@@ -134,6 +134,8 @@ SCHEMA: list[dict] = [
      "help": "Scheduled posts are uploaded private and YouTube makes them public at the slot time."},
     {"key": "youtube.slots_per_day", "type": "int", "min": 1, "label": "Scheduled posts per day"},
     {"key": "youtube.slot_gap_hours", "type": "float", "min": 0.25, "label": "Hours between scheduled posts"},
+    {"key": "youtube.random_minutes", "type": "int", "min": 0, "label": "Random extra minutes per post",
+     "help": "Each scheduled post gets 0 to this many extra minutes at random, so posts don't land on round times and the gap varies (3 h + up to 60 min = 3–4 h). 0 = exact times."},
     {"key": "youtube.window_start", "type": "str", "label": "Post from (HH:MM)"},
     {"key": "youtube.window_end", "type": "str", "label": "Post until (HH:MM)"},
     {"key": "youtube.timezone", "type": "str", "label": "Time zone", "help": "e.g. Asia/Kolkata"},

@@ -1007,7 +1007,7 @@ function renderSched(){
   const el=$('sched');if(!el)return;
   if(!yt){el.innerHTML='<div class="card mut">Loading…</div>';return}
   if(el.contains(document.activeElement)&&/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName))return;  // don't wipe text being typed
-  const q=yt.queue||[],sig=JSON.stringify([q.map(i=>[i.key,i.at,i.status,i.error,i.title,i.suggested,i.description,i.custom_description]),yt.ai_ready,yt.paused,yt.connected,yt.configured,yt.channel,yt.pending&&yt.pending.user_code,yt.error,(yt.history||[]).map(h=>h.key),(yt.scheduled||[]).map(x=>x.key),yt.next_slot]);
+  const q=yt.queue||[],sig=JSON.stringify([q.map(i=>[i.key,i.at,i.status,i.error,i.title,i.suggested,i.description,i.custom_description]),yt.ai_ready,yt.plan,yt.privacy,yt.paused,yt.connected,yt.configured,yt.channel,yt.pending&&yt.pending.user_code,yt.error,(yt.history||[]).map(h=>h.key),(yt.scheduled||[]).map(x=>x.key),yt.next_slot]);
   if(sig===schedSig)return;schedSig=sig;
   const p=yt.plan||{};let day='';
   const rows=q.map((i,n)=>{
@@ -1024,7 +1024,8 @@ function renderSched(){
   const notes=[];
   if(!yt.connected||yt.pending)notes.push(`<div style="margin-top:12px">${!yt.connected&&!yt.pending?'<div class="err" style="font-size:13.5px;margin-bottom:8px">YouTube isn\'t connected, so nothing gets posted.</div>':''}${ytCard()}</div>`);
   else if(yt.paused)notes.push(`<div class="sq-note warn"><span>Posting is paused. When you resume, a clip whose time has passed goes up first and the rest move to the next free times.</span></div>`);
-  const plan=`Posts up to ${p.per_day} a day, ${p.gap} h apart, between ${esc(p.start)} and ${esc(p.end)} (${esc(p.tz)}), as ${esc(yt.privacy)}.`;
+  const r=+p.random||0,gapTxt=r?`${p.gap}–${+(+p.gap+r/60).toFixed(2)} h apart at random minutes`:`${p.gap} h apart`;
+  const plan=`Posts up to ${p.per_day} a day, ${gapTxt}, between ${esc(p.start)} and ${esc(p.end)} (${esc(p.tz)}), as ${esc(yt.privacy)}.`;
   el.innerHTML=`<div class="card"><div class="row between"><h2 style="margin:0">Scheduled</h2>
       ${yt.connected?`<button class="sm" data-sqa="pause">${yt.paused?'Resume posting':'Pause posting'}</button>`:''}</div>
     <div class="help" style="margin-top:6px">${plan} <a href="#" data-sqgo="settings">Change</a></div>

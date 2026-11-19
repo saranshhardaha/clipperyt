@@ -110,7 +110,8 @@ client_id = ""
 client_secret = ""
 privacy = "public"          # for "Post now": public, unlisted or private
 slots_per_day = 4           # scheduled posts per day
-slot_gap_hours = 3.0
+slot_gap_hours = 3.0         # at least this far apart
+random_minutes = 60          # + 0..60 random minutes per post: odd times, gaps 3–4 h. 0 = exact times
 window_start = "10:00"
 window_end = "22:00"
 timezone = "Asia/Kolkata"

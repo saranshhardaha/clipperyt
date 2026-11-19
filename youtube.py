@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import time
 import urllib.error
 import urllib.parse
@@ -230,39 +231,51 @@ def _hm(s: str, default: tuple[int, int]) -> tuple[int, int]:
         return default
 
 
+def _jitter(t: datetime, spread: int) -> timedelta:
+    """0..spread random minutes, seeded by the slot itself: the time shown as "next slot"
+    is the time a clip then gets, and re-asking never moves it."""
+    return timedelta(minutes=random.Random(t.strftime("%Y%m%d%H%M")).randint(0, spread)) if spread > 0 else timedelta()
+
+
 def next_slot(cfg: dict, taken: list[str], now: datetime | None = None, posted: list[str] = ()) -> str:
-    """Next free publish time (UTC ISO 'Z'): inside the daily window, slot_gap_hours apart,
-    at most slots_per_day per local day (counting `posted`, the times of posts already made),
-    at least 15 minutes from now."""
+    """Next free publish time (UTC ISO 'Z'): inside the daily window, at least slot_gap_hours
+    apart, at most slots_per_day per local day (counting `posted`, the times of posts already
+    made), at least 15 minutes from now. random_minutes adds 0..N minutes to each slot, so posts
+    land at odd minutes and the gaps vary between slot_gap_hours and slot_gap_hours + N."""
     tz = _tz(cfg)
     now = (now or datetime.now(timezone.utc)).astimezone(tz)
     gap = timedelta(hours=max(0.25, float(cfg.get("slot_gap_hours", 3))))
     per_day = max(1, int(cfg.get("slots_per_day", 4)))
+    spread = max(0, int(cfg.get("random_minutes", 60)))
     (h0, m0), (h1, m1) = _hm(cfg.get("window_start", "10:00"), (10, 0)), _hm(cfg.get("window_end", "22:00"), (22, 0))
-    busy = []
-    for t in taken:
-        try:
-            busy.append(datetime.fromisoformat(t.replace("Z", "+00:00")).astimezone(tz))
-        except ValueError:
-            pass
-    done = []
-    for t in posted:
-        try:
-            done.append(datetime.fromisoformat(t.replace("Z", "+00:00")).astimezone(tz))
-        except ValueError:
-            pass
-    earliest = now + timedelta(minutes=15)
+
+    def parse(xs):
+        out = []
+        for t in xs:
+            try:
+                out.append(datetime.fromisoformat(t.replace("Z", "+00:00")).astimezone(tz))
+            except ValueError:
+                pass
+        return out
+    busy, done = parse(taken), parse(posted)
+
+    def free(t: datetime) -> bool:
+        return all(abs((t - b).total_seconds()) >= gap.total_seconds() * 0.99 for b in busy)
+    earliest = (now + timedelta(minutes=15)).replace(second=0, microsecond=0) + timedelta(minutes=1)
     for day in range(0, 120):
         d = (now + timedelta(days=day)).date()
         start = datetime(d.year, d.month, d.day, h0, m0, tzinfo=tz)
         end = datetime(d.year, d.month, d.day, h1, m1, tzinfo=tz)
         if sum(1 for b in busy + done if b.date() == d) >= per_day:
             continue
-        t = start
-        while t <= end:
-            if t >= earliest and all(abs((t - b).total_seconds()) >= gap.total_seconds() * 0.99 for b in busy):
-                return t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            t += gap
+        # candidates: the window opening, now, and one gap after each scheduled post
+        cands = sorted({max(c, start, earliest) for c in [start] + [b + gap for b in busy]})
+        for c in cands:
+            if c > end:
+                break
+            for t in (c + _jitter(c, spread), c):  # the random time, else the plain one if that's all that fits
+                if t <= end and free(t):
+                    return t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     raise YouTubeError("No free posting slot in the next 120 days. Widen the window or add slots per day.")
 
 

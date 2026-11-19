@@ -16,7 +16,7 @@ from tests.test_server import call
 
 G = {"polls": 0, "uploads": {}, "meta": [], "deleted": [], "refreshes": 0}
 CFG = {"client_id": "cid.apps.googleusercontent.com", "client_secret": "sec", "privacy": "public",
-       "slots_per_day": 2, "slot_gap_hours": 3, "window_start": "10:00", "window_end": "22:00",
+       "slots_per_day": 2, "slot_gap_hours": 3, "random_minutes": 0, "window_start": "10:00", "window_end": "22:00",
        "timezone": "Asia/Kolkata", "category_id": "20", "made_for_kids": False}
 
 
@@ -107,6 +107,26 @@ class Slots(unittest.TestCase):
                          "2026-11-21T04:30:00Z")
         self.assertEqual(youtube.local_day(CFG, first, now), "Today")
         self.assertEqual(youtube.local_day(CFG, third, now), "Tomorrow")
+
+    def test_random_minutes_and_gaps(self):
+        cfg = {**CFG, "slots_per_day": 4, "random_minutes": 60}
+        now = datetime(2026, 11, 20, 3, 0, tzinfo=timezone.utc)
+        taken = []
+        for _ in range(16):
+            t = youtube.next_slot(cfg, taken, now)
+            self.assertEqual(t, youtube.next_slot(cfg, taken, now))  # what's shown is what a clip gets
+            taken.append(t)
+        ts = [datetime.fromisoformat(t.replace("Z", "+00:00")) + timedelta(hours=5, minutes=30) for t in taken]  # IST
+        for t in ts:
+            self.assertTrue((10, 0) <= (t.hour, t.minute) <= (22, 0), t)
+        days = {}
+        for t in ts:
+            days.setdefault(t.date(), []).append(t)
+        self.assertTrue(all(len(v) <= 4 for v in days.values()))
+        gaps = [(b - a).total_seconds() / 3600 for v in days.values() for a, b in zip(v, v[1:])]
+        self.assertTrue(gaps and all(3 <= g <= 4 for g in gaps), gaps)
+        self.assertGreater(len({round(g, 2) for g in gaps}), 1)        # the gaps differ
+        self.assertTrue(any(t.minute not in (0, 30) for t in ts))      # not on round times
 
 
 class OldConfig(unittest.TestCase):

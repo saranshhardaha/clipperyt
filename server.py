@@ -452,7 +452,7 @@ def yt_status() -> dict:
             "pending": {"user_code": p["user_code"], "url": p["verification_url"],
                         "left": max(0, int(p["expires_at"] - time.time()))} if p else None,
             "next_slot": nxt, "scheduled": sched, "uploads": UPLOADS, "queue": items, "paused": q["paused"],
-            "history": hist, "ai_ready": ai_ready(), "plan": {"per_day": cfg.get("slots_per_day", 4), "gap": cfg.get("slot_gap_hours", 3),
+            "history": hist, "ai_ready": ai_ready(), "plan": {"per_day": cfg.get("slots_per_day", 4), "gap": cfg.get("slot_gap_hours", 3), "random": cfg.get("random_minutes", 60),
                                       "start": cfg.get("window_start", "10:00"), "end": cfg.get("window_end", "22:00"),
                                       "tz": cfg.get("timezone", "Asia/Kolkata")}}
 
