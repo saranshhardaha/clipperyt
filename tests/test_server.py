@@ -167,6 +167,33 @@ class Api(unittest.TestCase):
         self.assertIn("log of done-1", (sess / "job.log").read_text())
         call(self.port, "/api/jobs/fail-1/delete", {})
 
+    def test_review_states_and_attention(self):
+        sess = clipper.channel_dir(clipper.SESSIONS, "revchan") / "20990110-0000-revchan"
+        for name, video in (("01_00-00-10", True), ("02_00-00-40", True), ("03_00-01-10", False)):
+            c = sess / "clips" / name
+            c.mkdir(parents=True)
+            if video:
+                (c / "short.mp4").write_bytes(b"x")
+        (sess / "meta.json").write_text(json.dumps({"channel": "revchan", "platform": "twitch"}))
+        (sess / "stream.ts").write_bytes(b"x")
+        p = self.port
+        code, r = call(p, "/api/clips?channel=revchan")
+        self.assertEqual(r["counts"], {"new": 2, "kept": 0, "skipped": 0, "posted": 0})
+        self.assertEqual([c["name"] for c in r["clips"]], ["01_00-00-10", "02_00-00-40"])  # stream order
+        self.assertEqual(call(p, f"/api/sessions/{sess.name}/clips/01_00-00-10/review", {"state": "nope"})[0], 400)
+        code, r = call(p, f"/api/sessions/{sess.name}/clips/01_00-00-10/review", {"state": "kept", "title": "My title"})
+        self.assertEqual((code, r["state"], r["title"]), (200, "kept", "My title"))
+        r = call(p, "/api/clips?channel=revchan&state=new")[1]
+        self.assertEqual([c["name"] for c in r["clips"]], ["02_00-00-40"])
+        self.assertEqual(r["counts"]["kept"], 1)
+        a = call(p, "/api/attention")[1]
+        fix = [i for i in a["items"] if sess.name in i["text"]]
+        self.assertEqual(len(fix), 1)                                       # the failed clip
+        self.assertEqual(fix[0]["action"]["post"], f"/api/sessions/{sess.name}/redo")
+        self.assertGreaterEqual(a["new_clips"], 1)
+        call(p, f"/api/sessions/{sess.name}/clips/01_00-00-10/review", {"state": "new"})
+        self.assertEqual(call(p, "/api/clips?channel=revchan")[1]["counts"]["new"], 2)
+
     def test_files_no_traversal(self):
         self.assertEqual(call(self.port, "/files/../config.toml")[0], 404)
 

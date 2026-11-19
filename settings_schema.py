@@ -113,13 +113,26 @@ SCHEMA: list[dict] = [
      "help": "After a reboot, autostart jobs and One-link jobs wait up to this long for the recordings folder "
              "(NAS/USB drives often mount late). Watch jobs keep retrying after that anyway."},
 
+    # ---- titles (AI via OpenRouter) — only used when you press "Titles" on a clip
+    {"key": "titles.openrouter_api_key", "type": "secret", "label": "OpenRouter API key",
+     "help": "From openrouter.ai/keys. Used only when you press Titles on a clip; recording and clipping never "
+             "call it. The clip's transcript and chat lines are sent to the model you pick."},
+    {"key": "titles.model", "type": "str", "label": "Model",
+     "help": "Any OpenRouter model id. x-ai/grok-4.7 (Grok 4.7) is the default; cheaper models work too. "
+             "Start typing to pick from OpenRouter's list."},
+    {"key": "titles.language", "type": "enum", "options": ["hinglish", "english", "hindi"],
+     "labels": {"hinglish": "Hinglish (Latin script)", "english": "English", "hindi": "Hindi (Devanagari)"},
+     "label": "Title language"},
+    {"key": "titles.style", "type": "str", "label": "Style notes (optional)",
+     "help": "e.g. \"mention GTA RP\", \"no emojis\", \"always add the streamer's name\"."},
+
     # ---- limits
     {"key": "limits.max_parallel_processing", "type": "int", "min": 1, "label": "Clip jobs at once",
      "help": "How many streams can be cut + transcribed + rendered at the same time. 1 is safest for whisper."},
 ]
 
 SECTION_TITLES = {"stream": "Stream defaults", "spikes": "Spike detection", "clip": "Clips",
-                  "captions": "Captions", "render": "Render", "storage": "Storage", "limits": "Limits"}
+                  "captions": "Captions", "render": "Render", "storage": "Storage", "titles": "Titles (AI)", "limits": "Limits"}
 BY_KEY = {f["key"]: f for f in SCHEMA}
 LEGACY = {"render.vertical", "render.mode"}  # superseded by render.format
 

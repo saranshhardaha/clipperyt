@@ -30,7 +30,12 @@ Add `--service` to either one to also start the dashboard automatically (systemd
   - Tick **autostart** and the job starts again whenever the dashboard starts, for example after a reboot.
   - **Stop** still clips what was recorded. **Kill** stops at once, without clipping.
   - Finished one-link and fix/re-clip jobs leave the list by themselves. The session keeps the clips, and the job's log is added to the session's `job.log`. Failed ones stay until you press **Clear failed**.
-- **Clips:** every finished clip from every session in one grid, newest first or by score. You can filter by channel or show only clip requests. Each clip can be played, downloaded (short or raw), and opened in its session.
+- **Review:** your morning inbox. The dashboard opens here when there are new clips and nothing is on air, and the tab shows how many are new.
+  - **One by one:** a big vertical player. Pick an AI title or type one, copy the title and description, then **Skip**, **Download** or **Keep**; later, **Mark posted**.
+  - Keys on a computer: ← → move, K keep, S skip, D download, P posted, Space play. On a phone, swipe left or right on the video. Every change has **Undo**.
+  - Pressing **Keep** fetches AI titles if you've added an OpenRouter key, so you don't pay for clips you skip.
+  - The New, Kept, Posted and Skipped filters are saved per clip (`review.json`), so they're the same on every device. **Grid** shows all clips at once.
+- **Needs attention:** one strip at the top of every tab, listing failed jobs, YouTube blocking a recorder, failed clips, a missing or full drive, missing tools and folders the dashboard can't write to. Each item has the button that fixes it (Fix clips, Upload cookies, How to fix…).
 - **Sessions:** every recording with its length, chat, chatters, spikes, clips and size.
   - Open a session to play or download each clip, its raw cut and its captions, or to list spikes with the current settings.
   - **Re-make clips** redoes the session with the current settings.
@@ -126,6 +131,23 @@ When you wake up, open `sessions/<date>/clips.md`. It lists every clip with its 
 | `raw.mp4` | the original 45 s cut with no edits |
 | `speech.srt` | the whisper transcript, to fix typos and re-render |
 | `chat.txt` | the most repeated chat messages at that moment |
+
+## Captions
+
+Captions are timed to the words, not to whisper's long blocks, which used to start during the silence before someone spoke.
+- whisper.cpp gives per-word times (`--dtw`, flash attention off).
+- The app builds short 2–5 word captions, each shown from its first word to just after its last.
+- With a model or whisper build that can't do word times, each block is trimmed so it doesn't start inside silence.
+
+## Titles for Shorts (AI via OpenRouter)
+
+**Titles** on a clip, in its session or the Clips tab, asks an AI model through OpenRouter for 5 title options and hashtags, using the transcript and what chat said.
+- The default model is `x-ai/grok-4.7` (Grok). Any OpenRouter model works, and Settings has a picker with prices.
+- You also get a description with the streamer credit and stream link. The app writes that part itself, not the model.
+- Each line has a Copy button.
+- Add your key from openrouter.ai/keys in **Settings → Titles (AI)**.
+- It only runs when you press the button, so recording and clipping never call it and overnight runs stay free.
+- Results and their cost are saved with the clip. **Suggest again** asks for new ones.
 
 ## Clip requests
 

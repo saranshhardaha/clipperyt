@@ -61,7 +61,7 @@ def load_cfg() -> dict:
         shutil.copy(ROOT / "config.example.toml", CONFIG)
     with open(CONFIG, "rb") as f:
         cfg = tomllib.load(f)
-    for sec in ("stream", "spikes", "clip", "captions", "render", "limits", "storage"):
+    for sec in ("stream", "spikes", "clip", "captions", "render", "limits", "storage", "titles"):
         cfg.setdefault(sec, {})
     cfg["stream"].update(cfg["stream"].pop("options", {}))  # flatten [stream.options]
     global SESSIONS, EXTRA_ROOTS, YTDLP_AUTH

@@ -94,6 +94,14 @@ also_scan = []
 # wait up to this long for the recordings folder (watch jobs keep retrying after that anyway)
 wait_for_drive_seconds = 300
 
+[titles]
+# "Titles" on a clip asks an AI model (through OpenRouter) for YouTube Shorts titles — only when
+# you press it; recording and clipping never call it. Key from openrouter.ai/keys.
+openrouter_api_key = ""
+model = "x-ai/grok-4.7"     # any OpenRouter model id
+language = "hinglish"       # "hinglish", "english" or "hindi"
+style = ""                  # optional notes, e.g. "mention GTA RP"
+
 [limits]
 # How many streams can be cut + transcribed + rendered at the same time.
 # Recording is never limited; clipping waits for a free slot. 1 is safest for whisper.

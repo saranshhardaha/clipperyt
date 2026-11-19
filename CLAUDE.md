@@ -16,6 +16,8 @@ Records a YouTube / Twitch / Kick live stream and its chat with no accounts or A
 - `chat_kick.py`: Kick's public Pusher websocket. Unofficial and can break.
 - `spikes.py`: pure `find_moments(chat, rec_start_ms, cfg)` with no I/O.
 - `render.py`: cutting, whisper.cpp captions, ASS subs (captions + credit) and the render.
+  - Captions are word-timed: `-ojf --dtw <preset> -nfa` gives per-token `t_dtw` (DTW is empty while flash attention is on), and `words_to_cues()` builds 2–5 word cues.
+  - Without DTW (unknown model or old build, detected via `--help`), `trim_to_speech()` cuts segment starts out of silences from ffmpeg `silencedetect`. Before this, captions showed about 3 s early.
   - `render.format` takes 4 values: `9:16-blur` and `9:16-bars` keep the whole 16:9 frame, plus `16:9` and `9:16-crop`. Legacy `vertical`/`mode` keys still map. See `filter_graph()`.
   - With no libass, `render()` drops the subs and warns instead of failing.
   - Encoder `auto` = videotoolbox → nvenc → libx264.
@@ -54,7 +56,10 @@ Records a YouTube / Twitch / Kick live stream and its chat with no accounts or A
 - Fix/Redo/Delete: `make(n, m, folder=…)` redoes a clip in place and keeps its start. `moment.json` is written *before* cutting, so failed clips stay fixable; older clips fall back to `spikes.json` or the folder time (`moment_for_clip`). `failed_clips()` lists folders without a final video. `delete_clip()` also records the start in `.deleted_clips`, which `_add_clips()` skips. The job mode is `redo` with `clips` (none = all failed).
 - Live passes: while recording, every `process_every_minutes` a detached `clipper.py window <session> <since> <until>` clips `[since, until)`, leaving a margin of merge + length seconds. `.clipped_until` in the session records progress, and the end-of-stream `cmd_process(after_live=True)` only clips from there. `max_clips` applies per window.
 - Drive at boot: `wait_for_storage()` (`[storage] wait_for_drive_seconds`) is used by server autostart (in a thread) and `cmd_run`. The systemd unit waits for `remote-fs.target`.
-- `/api/clips` and the Clips tab list every clip across sessions.
+- Review (Phase 1 of the UX plan): `review.py` keeps a clip's state (new/kept/skipped/posted, plus the chosen title and URL) in `clips/<clip>/review.json`.
+  - `/api/clips` (sort `stream` = newest session, then stream order; `state` filter; `counts`; `ai_ready`) feeds the Review tab, which has one-by-one and grid views. `POST …/clips/<name>/review` sets the state.
+  - Keep auto-fetches titles when a key is set.
+- Needs attention: `attention()` / `/api/attention` collects failed jobs, recorder errors (bot check → cookies), failed clips (with a redo POST action), missing or full drives, missing tools and write problems. It also returns `new_clips` for the tab badge. The strip is shown on every tab.
 
 ## Timing rules (don't break)
 - Live sessions: `meta.rec_start_ms` = the moment the first video bytes hit disk, by local clock.
@@ -65,6 +70,8 @@ Records a YouTube / Twitch / Kick live stream and its chat with no accounts or A
 
 ## Conventions
 - Don't call any LLM at runtime. Overnight runs must be free and offline-capable.
+  - The one exception is `titles.py`: OpenRouter chat completions, default model `x-ai/grok-4.7`, sending only an `X-Title: clipperyt` header and no referer. It runs only when the user presses "Titles" on a clip and is never called from jobs. It's cached in `clips/<clip>/titles.json` with the cost. The description's credit and link are written by us, not the model. `/api/titles/models` serves the model picker.
+- UX roadmap: `docs/superpowers/specs/2026-11-19-ux-plan.md` (review inbox, needs-attention strip, smart add box, session timeline with manual clips, settings reorganisation).
 - Keep the streamer credit (burned-in line + clips.md links).
 - Test offline with fakes: a synthetic `stream.ts` (ffmpeg testsrc2), synthetic chat TSV + meta.json, and a fake `streamlink`/`yt-dlp` on PATH. YouTube can't be reached from the sandbox that wrote this.
 

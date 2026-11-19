@@ -30,8 +30,10 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import clipper
 import mover
+import review
 import settings_schema
 import stats
+import titles
 
 try:
     import tomllib
@@ -297,6 +299,7 @@ def session_detail(sid: str) -> dict:
             "srt": f"/files/{sid}/clips/{c.name}/speech.srt" if (c / "speech.srt").exists() else None,
             "score": m.get("score"), "messages": m.get("messages"), "top": m.get("top", []),
             "requests": m.get("requests", 0), "kind": m.get("kind", "spike"), "failed": not final,
+            "titles": titles.cached(c),
         })
     try:
         meta = json.loads((d / "meta.json").read_text())
@@ -308,10 +311,12 @@ def session_detail(sid: str) -> dict:
             "process_log": tail(d / "process.log", 30)}
 
 
-def all_clips(channel: str = "", requested: bool = False, sort: str = "new",
-              offset: int = 0, limit: int = 48) -> dict:
-    """Every finished clip across all sessions/folders, for the Clips tab."""
+def all_clips(channel: str = "", requested: bool = False, sort: str = "stream",
+              offset: int = 0, limit: int = 48, state: str = "") -> dict:
+    """Every finished clip across all sessions/folders, for the Review tab.
+    sort: stream (newest session first, then in stream order) | new (newest made) | score."""
     items, chans = [], set()
+    counts = {s_: 0 for s_ in review.STATES}
     for d in all_session_dirs():
         try:
             meta = json.loads((d / "meta.json").read_text())
@@ -327,12 +332,11 @@ def all_clips(channel: str = "", requested: bool = False, sort: str = "new",
                 spikes_ = json.loads((d / "spikes.json").read_text())
             except Exception:
                 pass
-        clip_dirs = sorted(p for p in (d / "clips").glob("*/") if p.is_dir()) if (d / "clips").exists() else []
-        for n, c in enumerate(clip_dirs):
+        for idx, (n, start, c) in enumerate(clipper.clip_folders(d)):
             final = next((c / f for f in ("short.mp4", "captioned.mp4") if (c / f).exists()), None)
             if not final:
                 continue
-            m = spikes_[n] if n < len(spikes_) else {}
+            m = spikes_[idx] if idx < len(spikes_) else {}
             if (c / "moment.json").exists():
                 try:
                     m = json.loads((c / "moment.json").read_text())
@@ -340,16 +344,83 @@ def all_clips(channel: str = "", requested: bool = False, sort: str = "new",
                     pass
             if requested and not m.get("requests"):
                 continue
+            rv = review.get(c)
+            counts[rv["state"]] += 1
+            if state and rv["state"] != state:
+                continue
             base = f"/files/{d.name}/clips/{c.name}"
             items.append({"session": d.name, "channel": ch, "platform": meta.get("platform"),
-                          "title": meta.get("title"), "name": c.name, "made": int(final.stat().st_mtime),
+                          "title": meta.get("title"), "name": c.name, "n": n, "start": start,
+                          "made": int(final.stat().st_mtime), "review": rv,
                           "video": f"{base}/{final.name}", "vertical": final.name == "short.mp4",
                           "raw": f"{base}/raw.mp4" if (c / "raw.mp4").exists() else None,
                           "srt": f"{base}/speech.srt" if (c / "speech.srt").exists() else None,
                           "score": m.get("score"), "requests": m.get("requests", 0),
-                          "top": [t for t in m.get("top", []) if not t.startswith("clip requested")][:3]})
-    items.sort(key=(lambda x: x["score"] or 0) if sort == "score" else (lambda x: x["made"]), reverse=True)
-    return {"total": len(items), "clips": items[offset: offset + limit], "channels": sorted(chans)}
+                          "top": [t for t in m.get("top", []) if not t.startswith("clip requested")][:3],
+                          "titles": titles.cached(c)})
+    if sort == "score":
+        items.sort(key=lambda x: x["score"] or 0, reverse=True)
+    elif sort == "new":
+        items.sort(key=lambda x: x["made"], reverse=True)
+    else:  # review order: newest session first, clips in stream order inside it
+        items.sort(key=lambda x: (x["session"], -x["start"]), reverse=True)
+    cfg = clipper.load_cfg()["titles"]
+    return {"total": len(items), "clips": items[offset: offset + limit], "channels": sorted(chans),
+            "counts": counts, "ai_ready": bool(cfg.get("openrouter_api_key") or os.environ.get("OPENROUTER_API_KEY"))}
+
+
+def attention() -> dict:
+    """Everything that needs the user, each with the action that fixes it."""
+    items: list[dict] = []
+    for j in all_jobs():
+        st, s_ = j["state"], j["state"].get("status")
+        if s_ == "failed" and j["kind"] in ("url", "process"):
+            items.append({"level": "bad", "text": f"{j['name']} failed: {st.get('error') or 'the log says why'}",
+                          "action": {"label": "Show job", "go": "jobs", "filter": "failed"}})
+        elif s_ == "waiting" and st.get("error"):
+            e = str(st["error"]).replace("recorder: ", "")
+            bot = any(w in e.lower() for w in ("bot check", "not a bot", "sign in", "cookies"))
+            items.append({"level": "warn", "text": f"{j['name']}: {e}",
+                          "action": {"label": "Upload cookies", "go": "settings", "anchor": "cookies"} if bot
+                          else {"label": "Show job", "go": "jobs", "filter": "waiting"}})
+    all_s = sessions()
+    for x in all_s:
+        nf = x["stats"].get("failed") or 0
+        if nf and not x["busy"] and x["stats"].get("has_source"):
+            items.append({"level": "bad", "text": f"{nf} clip{'s' if nf > 1 else ''} failed in {x['channel']} ({x['id']})",
+                          "action": {"label": "Fix clips", "post": f"/api/sessions/{x['id']}/redo",
+                                     "done": "Fixing failed clips…"}})
+    sysinfo = stats.system_stats(all_s)
+    for k in sysinfo["disks"]:
+        if k.get("missing"):
+            items.append({"level": "bad", "text": f"The {k['label']} drive isn't connected ({k['path']}). Jobs wait for it.",
+                          "action": {"label": "Open System", "go": "system"}})
+        elif k["label"] == "recordings" and (k["used_pct"] >= 90 or k["free_gb"] < 20):
+            items.append({"level": "warn", "text": f"Recordings drive is {k['used_pct']:.0f}% full ({k['free_gb']} GB left, "
+                                                   f"about {int(k['free_gb'] / 5)} h of 1080p60)",
+                          "action": {"label": "Open sessions", "go": "sessions"}})
+    t = sysinfo["tools"]
+    cfg = clipper.load_cfg()
+    if t.get("ffmpeg", {}).get("path") and not t.get("libass", {}).get("ok"):
+        items.append({"level": "warn", "text": "Captions and the streamer credit can't be burned in: this ffmpeg has no libass",
+                      "action": {"label": "How to fix", "go": "system"}})
+    if cfg["captions"].get("enabled", True) and not (t.get("whisper", {}).get("path") and t.get("model", {}).get("ok")):
+        items.append({"level": "warn", "text": "Clips are made without captions: whisper or its model is missing",
+                      "action": {"label": "How to fix", "go": "system"}})
+    if t.get("yt-dlp", {}).get("path") and not (t.get("yt-dlp-js") or {}).get("runtime"):
+        items.append({"level": "warn", "text": "YouTube links may fail (“No video formats found”): yt-dlp has no JS runtime",
+                      "action": {"label": "How to fix", "go": "system"}})
+    for p in write_problems():
+        items.append({"level": "bad", "text": f"The dashboard can't write to {p}. New jobs will fail.",
+                      "action": {"label": "How to fix", "go": "system"}})
+    new = 0
+    for x in all_s:
+        d = clipper.find_session(x["id"])
+        for _, _, c in clipper.clip_folders(d) if d else []:
+            if any((c / f).exists() for f in ("short.mp4", "captioned.mp4")) and review.get(c)["state"] == "new":
+                new += 1
+    items.sort(key=lambda i: i["level"] != "bad")
+    return {"items": items, "new_clips": new}
 
 
 def session_spikes(sid: str) -> list[dict]:
@@ -576,10 +647,19 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"log": tail(JOBS / m[1] / "job.log", int(q.get("n", ["200"])[0]))})
         if path == "/api/sessions":
             return self.send(200, sessions())
+        if path == "/api/titles/models":
+            try:
+                return self.send(200, titles.models())
+            except titles.TitleError as e:
+                return self.send(502, {"error": str(e)})
         if path == "/api/clips":
             g = lambda k, d="": q.get(k, [d])[0]
-            return self.send(200, all_clips(g("channel"), g("requested") == "1", g("sort", "new"),
-                                            int(g("offset", "0") or 0), min(200, int(g("limit", "48") or 48))))
+            st = g("state")
+            return self.send(200, all_clips(g("channel"), g("requested") == "1", g("sort", "stream"),
+                                            int(g("offset", "0") or 0), min(200, int(g("limit", "48") or 48)),
+                                            st if st in review.STATES else ""))
+        if path == "/api/attention":
+            return self.send(200, attention())
         if m := re.fullmatch(r"/api/sessions/([\w-]+)", path):
             if self.session_or_404(m[1]):
                 self.send(200, session_detail(m[1]))
@@ -646,6 +726,29 @@ class H(BaseHTTPRequestHandler):
             skipped = sum(1 for d in all_session_dirs() if needs_move(d) and d.name in busy)
             return self.send(200, {"result": f"moving {len(todo)} session(s)"
                                              + (f", {skipped} busy — try again later" if skipped else "")})
+        if m := re.fullmatch(r"/api/sessions/([\w-]+)/clips/([\w-]+)/titles", path):
+            sid, name = m[1], m[2]
+            if not self.session_or_404(sid):
+                return
+            d = clipper.find_session(sid)
+            clip = d / "clips" / name
+            if not clipper.CLIP_RE.match(name) or not clip.is_dir():
+                return self.send(404, {"error": "no such clip"})
+            try:  # only on demand — jobs never call an LLM
+                return self.send(200, titles.suggest(d, clip, clipper.load_cfg()["titles"]))
+            except titles.TitleError as e:
+                return self.send(400, {"error": str(e)})
+        if m := re.fullmatch(r"/api/sessions/([\w-]+)/clips/([\w-]+)/review", path):
+            sid, name = m[1], m[2]
+            if not self.session_or_404(sid):
+                return
+            clip = clipper.find_session(sid) / "clips" / name
+            if not clipper.CLIP_RE.match(name) or not clip.is_dir():
+                return self.send(404, {"error": "no such clip"})
+            try:
+                return self.send(200, review.put(clip, str(data.get("state", "")), data.get("title"), data.get("url")))
+            except ValueError as e:
+                return self.send(400, {"error": str(e)})
         if m := re.fullmatch(r"/api/sessions/([\w-]+)/clips/([\w-]+)/delete", path):
             sid, name = m[1], m[2]
             if not self.session_or_404(sid):
