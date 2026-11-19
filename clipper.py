@@ -778,14 +778,52 @@ def write_clips_md(session: Path, maker: "_ClipMaker | None" = None) -> None:
                                       encoding="utf-8")
 
 
-def delete_clip(session: Path, folder: str) -> None:
-    """Remove one clip (folder + clips.md row) and remember it so it isn't re-added."""
+TRASH = ".trash"        # session/.trash/<clip>~<epoch>: deleted clips, restorable for TRASH_DAYS
+TRASH_DAYS = 7
+TRASH_RE = re.compile(r"^(\d+_\d\d-\d\d-\d\d)~(\d+)$")
+
+
+def delete_clip(session: Path, folder: str) -> str:
+    """Move one clip to the session's trash (restorable for TRASH_DAYS days), drop its clips.md row,
+    and remember it so add-only runs don't bring it back. Returns the trash id for Undo."""
     if not CLIP_RE.match(folder) or not (session / "clips" / folder).is_dir():
         raise ValueError("no such clip")
     start = clip_folder_start(folder)
-    shutil.rmtree(session / "clips" / folder)
+    trash = session / TRASH
+    trash.mkdir(exist_ok=True)
+    tid = f"{folder}~{int(time.time())}"
+    shutil.move(str(session / "clips" / folder), str(trash / tid))
     (session / DELETED).write_text(json.dumps(sorted(set(deleted_starts(session) + [start]))))
     write_clips_md(session)
+    return tid
+
+
+def restore_clip(session: Path, tid: str) -> str:
+    """Undo a delete: move the clip back from the trash."""
+    m = TRASH_RE.match(tid or "")
+    src = session / TRASH / tid if m else None
+    if not src or not src.is_dir():
+        raise ValueError("that clip isn't in the trash any more")
+    folder = m[1]
+    if (session / "clips" / folder).exists():
+        raise ValueError(f"a clip named {folder} exists again — delete or rename it first")
+    (session / "clips").mkdir(exist_ok=True)
+    shutil.move(str(src), str(session / "clips" / folder))
+    start = clip_folder_start(folder)
+    (session / DELETED).write_text(json.dumps([g for g in deleted_starts(session) if abs(g - start) > 0.5]))
+    write_clips_md(session)
+    return folder
+
+
+def purge_trash(session: Path, days: float = TRASH_DAYS) -> int:
+    """Delete trashed clips older than `days`."""
+    n = 0
+    for d in (session / TRASH).iterdir() if (session / TRASH).is_dir() else []:
+        m = TRASH_RE.match(d.name)
+        if m and int(m[2]) < time.time() - days * 86400:
+            shutil.rmtree(d, ignore_errors=True)
+            n += 1
+    return n
 
 
 def _redo_clips(session: Path, cfg: dict, folders: list[str] | None) -> None:

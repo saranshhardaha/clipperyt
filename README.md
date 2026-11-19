@@ -41,6 +41,8 @@ Add `--service` to either one to also start the dashboard automatically (systemd
   - Keys on a computer: ← → move, K keep, S skip, D download, P posted, Space play. On a phone, swipe left or right on the video. Every change has **Undo**.
   - Pressing **Keep** fetches AI titles if you've added an OpenRouter key, so you don't pay for clips you skip.
   - The New, Kept, Posted and Skipped filters are saved per clip (`review.json`), so they're the same on every device. **Grid** shows all clips at once.
+- **Getting started:** a short checklist on the Jobs page until the first channel, the tools and the first recording are in place. Each step ticks itself off, and you can hide it.
+- **Confirmations** use the dashboard's own dialog: the dangerous button is red, and Cancel is the default. Buttons show a spinner while their action runs, so nothing gets started twice.
 - **Needs attention:** one strip at the top of every tab, listing failed jobs, YouTube blocking a recorder, failed clips, a missing or full drive, missing tools and folders the dashboard can't write to. Each item has the button that fixes it (Fix clips, Upload cookies, How to fix…).
 - **Sessions:** every recording with its length, chat, chatters, spikes, clips and size.
   - Open a session to play or download each clip, its raw cut and its captions, or to list spikes with the current settings.
@@ -57,7 +59,10 @@ Add `--service` to either one to also start the dashboard automatically (systemd
     - Length, delay, lead, output shape and captions all follow the new settings. **Redo** on a single clip does the same for that clip.
   - **Add clip-request clips** finds moments where 3 or more chatters asked for a clip and cuts only the ones without a clip yet. Existing clips stay.
   - **Fix N failed clips**, or **Fix** on a failed clip, cuts, captions and renders it again in place. **Redo** does the same for a working clip, for example after editing `speech.srt` or changing settings.
-  - **Delete** (also on the Clips tab) removes a clip and its clips.md row. Deleted clips aren't re-added by "Add clip-request clips".
+  - **Delete** (on the session page and in Review's grid) moves a clip to the session's `.trash` folder and drops its clips.md row.
+    - The toast has **Undo**.
+    - Trashed clips are deleted for good after 7 days.
+    - While a clip is deleted, "Add clip-request clips" doesn't bring it back.
   - CLI: `clipper.py redo <session> [clip…]`. With no clip names it redoes every failed clip.
   - **Free disk** deletes the full recording but keeps the clips.
 - **Settings:** grouped into **Detection · Clips & captions · Output · Titles (AI) · Channels & recording · Storage & limits · Config file** (a dropdown on a phone).

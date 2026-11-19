@@ -195,6 +195,25 @@ details.more>summary{list-style:none}details.more>summary::-webkit-details-marke
 details.more .menu{position:absolute;right:0;top:calc(100% + 6px);z-index:4;min-width:230px;background:var(--panel);border:1px solid var(--rule2);border-radius:9px;padding:6px;display:flex;flex-direction:column;box-shadow:0 10px 30px rgba(0,0,0,.35)}
 details.more .menu button{border:0;justify-content:flex-start;width:100%;padding:8px 10px}
 
+/* ---- dialog, busy buttons, checklist */
+dialog#dlg{border:1px solid var(--rule2);border-radius:12px;background:var(--panel);color:var(--ink);padding:20px 22px;max-width:min(440px,calc(100% - 32px));width:100%}
+dialog#dlg::backdrop{background:rgba(0,0,0,.55)}
+dialog#dlg h3{color:var(--ink);font-size:17px;margin:0 0 8px}
+dialog#dlg p{margin:0 0 18px;color:var(--mute);font-size:14px;line-height:1.5}
+dialog#dlg .row{justify-content:flex-end}
+button.danger{background:var(--bad);border-color:var(--bad);color:#fff}
+button.danger:hover{background:color-mix(in srgb,var(--bad) 85%,#000)}
+.busy{opacity:.75;pointer-events:none}
+.busy::after{content:"";width:11px;height:11px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite;margin-left:4px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.onboard ol{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.onboard li{display:flex;align-items:center;gap:10px;font-size:14px;border-top:1px solid var(--rule);padding-top:8px}
+.onboard li .tick{width:18px;height:18px;border-radius:50%;border:1.5px solid var(--rule2);flex:none;display:inline-flex;align-items:center;justify-content:center;font-size:11px}
+.onboard li.done .tick{background:var(--ok);border-color:var(--ok);color:var(--bg)}
+.onboard li.done span.t{color:var(--mute);text-decoration:line-through}
+.onboard li .opt{color:var(--faint);font-size:12.5px}
+.onboard li button{margin-left:auto}
+
 /* ---- needs attention */
 .attn{border:1px solid color-mix(in srgb,var(--standby) 45%,var(--rule));background:color-mix(in srgb,var(--standby) 7%,var(--panel));border-radius:10px;padding:10px 14px;margin-bottom:18px}
 .attn.bad{border-color:color-mix(in srgb,var(--bad) 55%,var(--rule));background:color-mix(in srgb,var(--bad) 6%,var(--panel))}
@@ -267,6 +286,7 @@ nav .badge{display:inline-block;min-width:18px;padding:0 6px;margin-left:6px;bor
 <!-- ============ JOBS ============ -->
 <div id="v-jobs">
   <div id="permwarn"></div>
+  <div id="onboard"></div>
   <div class="jhead"><h2>Jobs</h2>
     <button class="sm quiet" id="clear" hidden title="Remove failed or stopped one-link and fix/re-clip jobs. Their sessions and clips stay.">Clear failed</button>
     <button class="sm pri" id="newbtn" aria-expanded="false">New job</button></div>
@@ -334,7 +354,9 @@ nav .badge{display:inline-block;min-width:18px;padding:0 6px;margin-left:6px;bor
 <!-- ============ SYSTEM ============ -->
 <div id="v-system" hidden><div id="system"></div></div>
 </main>
-<div id="toast"></div>
+<div id="toast" role="status"></div>
+<dialog id="dlg" aria-labelledby="dlg-t"><form method="dialog"><h3 id="dlg-t"></h3><p id="dlg-b"></p>
+  <div class="row"><button value="cancel" id="dlg-no">Cancel</button><button value="ok" id="dlg-ok" class="pri">OK</button></div></form></dialog>
 
 <script>
 const $=id=>document.getElementById(id);
@@ -348,7 +370,19 @@ function tc(sec){sec=Math.max(0,Math.floor(sec));return[Math.floor(sec/3600),Mat
 let tab='jobs',settings=null,dirty=false,curSession=null,openLogs=new Set(),jobsSig='';
 
 async function j(u,o){let r;try{r=await fetch(u,o)}catch(e){return{error:'dashboard not reachable ('+e.message+')'}}let b={};try{b=await r.json()}catch(e){}if(!r.ok&&!b.error)b.error='HTTP '+r.status;return b}
-const post=(u,b)=>j(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});
+// the button that started an action shows a spinner and can't be pressed twice while it runs
+let lastBtn=null,lastAt=0;
+document.addEventListener('click',e=>{const b=e.target.closest('button,.btn');if(b&&!b.closest('dialog')){lastBtn=b;lastAt=Date.now()}},true);
+async function post(u,b){
+  const btn=Date.now()-lastAt<600&&lastBtn&&document.contains(lastBtn)?lastBtn:null;lastBtn=null;
+  if(btn){if(btn.dataset.busy)return{error:'Already working on it…'};btn.dataset.busy='1';btn.classList.add('busy');btn.setAttribute('aria-busy','true')}
+  try{return await j(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})})}
+  finally{if(btn){delete btn.dataset.busy;btn.classList.remove('busy');btn.removeAttribute('aria-busy')}}}
+// in-app confirm: ask('Title','what happens','Delete',true) → Promise<boolean>
+function ask(title,body,ok='OK',danger=false){
+  const d=$('dlg');$('dlg-t').textContent=title;$('dlg-b').textContent=body;
+  $('dlg-ok').textContent=ok;$('dlg-ok').className=danger?'danger':'pri';d.returnValue='cancel';
+  return new Promise(res=>{d.onclose=()=>res(d.returnValue==='ok');d.showModal();(danger?$('dlg-no'):$('dlg-ok')).focus()})}
 function toast(m,undo){const t=$('toast');t.textContent=m;
   if(undo){const b=document.createElement('button');b.className='sm';b.textContent='Undo';b.onclick=()=>{t.classList.remove('on');undo()};t.appendChild(b)}
   t.classList.add('on');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('on'),undo?6000:2600)}
@@ -359,7 +393,7 @@ const num=n=>n==null?'–':n>=10000?(n/1000).toFixed(1)+'k':String(n);
 // ---------- tabs
 $('tabs').onclick=e=>{const b=e.target.closest('button');if(b)show(b.dataset.t)};
 function show(t){
-  if(tab==='settings'&&t!=='settings'&&dirty&&!confirm('Leave without saving settings?'))return;
+  if(tab==='settings'&&t!=='settings'&&dirty){ask('Leave without saving?','Your changes in Settings are not saved yet.','Leave',true).then(ok=>{if(ok){dirty=false;$('set-msg').textContent='';show(t)}});return}
   if(tab!==t)scrollTo(0,0);tab=t;for(const b of $('tabs').children)b.classList.toggle('on',b.dataset.t===t);
   for(const v of['jobs','clips','sessions','settings','system'])$('v-'+v).hidden=v!==t;
   if(t==='clips')loadClips(false);
@@ -481,6 +515,26 @@ function jobCard(jb){
     ${openLogs.has(jb.id)?`<pre data-log="${esc(jb.id)}">…</pre>`:''}
   </article>`;
 }
+// first run: a short checklist until things are set up (or it's hidden)
+function renderOnboard(js){
+  const el=$('onboard');if(!el)return;
+  if(pref('onboardHidden','0')==='1'||!sysCache||!settings){el.innerHTML='';return}
+  const t=sysCache.tools||{},v=settings.values||{};
+  const tools=!!(t.ffmpeg&&t.ffmpeg.path&&t.streamlink&&t.streamlink.path&&t['yt-dlp']&&t['yt-dlp'].path);
+  const steps=[
+    {done:js.some(x=>x.kind==='watch'||x.kind==='url'),t:'Add a channel to watch, or a stream link',btn:'New job',go:()=>newJob(true)},
+    {done:tools,t:'Check the tools are installed (ffmpeg, streamlink, yt-dlp)',btn:'Open System',go:()=>show('system')},
+    {done:(sysCache.totals||{}).sessions>0,t:'Wait for the first recording: clips show up in Review',btn:null},
+    {done:!!(settings.cookies&&settings.cookies.set),opt:'only if YouTube asks “confirm you’re not a bot”',t:'Upload YouTube cookies',btn:'Open',go:()=>{sgroup='channels';setPref('sgroup','channels');show('settings')}},
+    {done:!!v['titles.openrouter_api_key'],opt:'for title suggestions',t:'Add an OpenRouter key',btn:'Open',go:()=>{sgroup='titles';setPref('sgroup','titles');show('settings')}},
+    {done:!!v['storage.sessions_dir'],opt:'if the app’s disk is small',t:'Record to a bigger drive',btn:'Open',go:()=>{sgroup='storage';setPref('sgroup','storage');show('settings')}},
+  ];
+  if(steps.slice(0,3).every(x=>x.done)){el.innerHTML='';return}  // set up: it goes away by itself
+  el.innerHTML=`<div class="card onboard"><div class="row between"><h2 style="margin:0">Getting started</h2><button class="sm quiet" id="ob-hide">Hide</button></div>
+    <ol>${steps.map((x,i)=>`<li class="${x.done?'done':''}"><span class="tick" aria-hidden="true">${x.done?'✓':''}</span><span><span class="t">${esc(x.t)}</span>${x.opt?` <span class="opt">(optional, ${esc(x.opt)})</span>`:''}</span>${!x.done&&x.btn?`<button class="sm" data-ob="${i}">${esc(x.btn)}</button>`:''}</li>`).join('')}</ol></div>`;
+  $('ob-hide').onclick=()=>{setPref('onboardHidden','1');el.innerHTML=''};
+  el.querySelectorAll('[data-ob]').forEach(b=>b.onclick=()=>steps[+b.dataset.ob].go())}
+
 // Cards never move: fixed sections by job type, A–Z by name inside. Status chips only filter.
 const SECTIONS=[['watch','Watching channels','Record every stream from these channels, clip it, then wait for the next one.'],
   ['url','One links','A single stream or past video. Removed from this list when done; the session keeps the clips.'],
@@ -515,7 +569,7 @@ async function refreshJobs(){
   const d0=sysCache&&sysCache.disks[0];
   $('chips').innerHTML=`<span class="chip${live?' air':''}"><b>${live}</b> on air</span><span class="chip"><b>${run}</b> running</span>`
     +(d0?`<span class="chip" title="${esc(d0.path)}">${d0.missing?'<b class="err">Recordings drive missing</b>':`<b>${d0.free_gb} GB</b> free`}</span>`:'');
-  renderFilters(js);
+  renderFilters(js);renderOnboard(js);
   $('clear').hidden=!js.some(x=>(x.kind==='url'||x.kind==='process')&&!x.running&&['failed','stopped'].includes(x.state.status));
   const sig=JSON.stringify(js)+[...openLogs].join()+jfilter;
   if(sig!==jobsSig){
@@ -537,9 +591,10 @@ $('jobs').onclick=async e=>{
   if(a==='log'){openLogs.has(id)?openLogs.delete(id):openLogs.add(id);return refreshJobs()}
   if(a==='open'){curSession=b.dataset.s;return show('sessions')}
   if(a==='edit'){const jb=(lastJobs||[]).find(x=>x.id===id);if(jb)editJob(jb);return}
-  if(a==='kill'&&!confirm('Kill this job now? It stops immediately and nothing more gets clipped.'))return;
-  if(a==='stop'&&!confirm('Stop this job? It finishes clipping what was recorded, then stops.'))return;
-  if(a==='delete'&&!confirm('Delete this job? Its sessions and clips are kept.'))return;
+  const jn=((lastJobs||[]).find(x=>x.id===id)||{}).name||'this job';
+  if(a==='kill'&&!await ask(`Kill ${jn}?`,'It stops immediately. Anything recorded since the last clip run is not clipped (the recording stays, so you can Re-make clips later).','Kill',true))return;
+  if(a==='stop'&&!await ask(`Stop ${jn}?`,'It stops recording, makes clips from what was recorded, then stops.','Stop'))return;
+  if(a==='delete'&&!await ask(`Delete ${jn}?`,'The job is removed from the list. Its sessions and clips are kept.','Delete job',true))return;
   const r=await post(`/api/jobs/${id}/${a}`);toast(r.result||r.error);if(a==='delete')openLogs.delete(id);refreshJobs();
 };
 $('jobs').onchange=async e=>{if(e.target.dataset.a!=='auto')return;const id=e.target.closest('.job').dataset.id;
@@ -569,7 +624,7 @@ function busyPill(b,mv){
     return `<span class="st moving">${mv&&mv.status==='moving'?'Moving '+pct+'%':'Waiting to move'}</span>`}
   return `<span class="st ${esc(b)}">${say(b)}</span>`}
 $('s-chan').onchange=()=>loadSessions();
-$('moveall').onclick=async()=>{if(!confirm('Move every session into <recordings folder>/<channel>/? Sessions being recorded or clipped are skipped.'))return;
+$('moveall').onclick=async()=>{if(!await ask('Move sessions?','Every session not in the recordings folder is moved into <recordings folder>/<channel>/. Sessions being recorded or clipped are skipped.','Move'))return;
   const r=await post('/api/sessions/move-all');toast(r.result||r.error);loadSessions()};
 $('sessions').onclick=e=>{const r=e.target.closest('tr[data-id]');if(r){curSession=r.dataset.id;openSession(curSession);history.replaceState(null,'','#sessions/'+curSession)}};
 let clipSig='';
@@ -634,14 +689,15 @@ async function openSession(id,soft){
     const rb=e.target.closest('[data-redo]'),db=e.target.closest('[data-del]'),pb=e.target.closest('[data-posted]');
     if(pb){const r=await post(`/api/sessions/${id}/clips/${pb.dataset.posted}/review`,{state:'posted'});toast(r.error||'Marked posted');clipSig='';openSession(id,true);refreshAttention();return}
     if(rb){const r=await post(`/api/sessions/${id}/redo`,{clips:[rb.dataset.redo]});toast(r.error||`Re-making ${rb.dataset.redo}…`);clipSig='';openSession(id,true)}
-    if(db){if(!confirm(`Delete clip ${db.dataset.del}? Its video, raw cut and captions are removed. This cannot be undone.`))return;
-      const r=await post(`/api/sessions/${id}/clips/${db.dataset.del}/delete`);toast(r.result||r.error);clipSig='';openSession(id,true)}};
+    if(db){const r=await post(`/api/sessions/${id}/clips/${db.dataset.del}/delete`);clipSig='';openSession(id,true);refreshAttention();
+      if(r.error)toast(r.error);else toast(`Deleted ${clipTime(db.dataset.del)}. It stays in the trash for 7 days.`,async()=>{
+        const u=await post(`/api/sessions/${id}/clips/restore`,{trash:r.trash});toast(u.result||u.error);clipSig='';openSession(id,true);refreshAttention()})}};
   $('reqclip').onclick=async()=>{const r=await post(`/api/sessions/${id}/requests`);toast(r.error||'Finding clip requests — new clips appear here as they finish');openSession(id,true)};
   $('reclip').onclick=async()=>{const r=await post(`/api/sessions/${id}/process`);toast(r.result||r.error);openSession(id,true)};
-  $('delsrc').onclick=async()=>{if(!confirm('Delete the full recording for this session? Clips stay, but you can no longer re-make them. This cannot be undone.'))return;
+  $('delsrc').onclick=async()=>{if(!await ask('Delete the recording?','The full recording of this session is deleted to free disk space. Clips stay, but they can no longer be re-made or fixed. This can\'t be undone.','Delete recording',true))return;
     const r=await post(`/api/sessions/${id}/delete-source`);toast(r.result||r.error);openSession(id,true)};
   if($('mvses'))$('mvses').onclick=async()=>{const r=await post(`/api/sessions/${id}/move`);toast(r.result||r.error);openSession(id,true)};
-  $('delses').onclick=async()=>{if(!confirm('Delete this whole session — recording, chat and clips? This cannot be undone.'))return;
+  $('delses').onclick=async()=>{if(!await ask('Delete the whole session?','The recording, chat and every clip of this session are deleted. This can\'t be undone.','Delete session',true))return;
     const r=await post(`/api/sessions/${id}/delete`);toast(r.result||r.error);curSession=null;loadSessions()};
 }
 
@@ -809,8 +865,9 @@ $('c-grid').onclick=async e=>{
   if(rs){const card=rs.closest('.clip'),[sid,name]=card.dataset.key.split('/');
     const r=await post(`/api/sessions/${sid}/clips/${name}/review`,{state:rs.dataset.rs});toast(r.error||`${stateWord[rs.dataset.rs]}`);loadClips(false);refreshAttention();return}
   if(!b)return;const[sid,name]=b.dataset.cdel.split('/');
-  if(!confirm(`Delete clip ${name} from ${sid}? This cannot be undone.`))return;
-  const r=await post(`/api/sessions/${sid}/clips/${name}/delete`);toast(r.result||r.error);if(!r.error)b.closest('.clip').remove();refreshAttention()};
+  const r=await post(`/api/sessions/${sid}/clips/${name}/delete`);if(r.error){toast(r.error);return}
+  b.closest('.clip').remove();refreshAttention();
+  toast(`Deleted ${clipTime(name)}. It stays in the trash for 7 days.`,async()=>{const u=await post(`/api/sessions/${sid}/clips/restore`,{trash:r.trash});toast(u.result||u.error);loadClips(false);refreshAttention()})};
 for(const id of['c-chan','c-sort','c-req'])$(id).onchange=()=>{ri=0;loadClips(false)};
 $('c-more').onclick=()=>loadClips(true);
 
@@ -887,7 +944,7 @@ $('settings').addEventListener('change',async e=>{
   const text=await e.target.files[0].text();const r=await post('/api/cookies',{text});
   toast(r.result||r.error);if(!r.error){dirty=false;loadSettings()}},true);
 $('settings').addEventListener('click',async e=>{
-  if(e.target.id!=='ck-del'||!confirm('Remove the YouTube cookies file?'))return;
+  if(e.target.id!=='ck-del'||!await ask('Remove the YouTube cookies?','The cookies file is deleted from this machine. YouTube recordings may hit the bot check again.','Remove',true))return;
   const r=await post('/api/cookies/remove');toast(r.result||r.error);dirty=false;loadSettings()});
 function renderSnav(){
   const changed=g=>settings.schema.some(f=>f.group===g&&!same(currentValue(f.key),settings.defaults[f.key]));

@@ -812,10 +812,18 @@ class H(BaseHTTPRequestHandler):
             if sid in busy_sessions():
                 return self.send(400, {"error": "a job is using this session — wait for it to finish"})
             try:
-                clipper.delete_clip(clipper.find_session(sid), name)
+                tid = clipper.delete_clip(clipper.find_session(sid), name)
             except ValueError as e:
                 return self.send(404, {"error": str(e)})
-            return self.send(200, {"result": f"deleted {name}"})
+            return self.send(200, {"result": f"Deleted {name}", "trash": tid})
+        if m := re.fullmatch(r"/api/sessions/([\w-]+)/clips/restore", path):
+            if not self.session_or_404(m[1]):
+                return
+            try:
+                name = clipper.restore_clip(clipper.find_session(m[1]), str(data.get("trash") or ""))
+            except ValueError as e:
+                return self.send(400, {"error": str(e)})
+            return self.send(200, {"result": f"Restored {name}", "clip": name})
         if m := re.fullmatch(r"/api/sessions/([\w-]+)/clip-at", path):
             sid = m[1]
             if not self.session_or_404(sid):
@@ -940,6 +948,14 @@ def main() -> None:
     for d in (clipper.DEFAULT_SESSIONS, JOBS, clipper.LOGS):
         d.mkdir(parents=True, exist_ok=True)
     mover.cleanup_partial()
+
+    def purge_loop():  # deleted clips stay restorable for clipper.TRASH_DAYS days
+        while True:
+            n = sum(clipper.purge_trash(d) for d in all_session_dirs())
+            if n:
+                print(f"trash: removed {n} clip(s) deleted more than {clipper.TRASH_DAYS} days ago", flush=True)
+            time.sleep(3600)
+    threading.Thread(target=purge_loop, daemon=True).start()
     bad = write_problems()
     if bad:
         print(f"!! user '{_user()}' can't write to: {', '.join(bad)}\n"

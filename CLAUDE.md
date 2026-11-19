@@ -69,6 +69,9 @@ Records a YouTube / Twitch / Kick live stream and its chat with no accounts or A
 - Settings (Phase 4): `settings_schema.GROUPS` / `GROUP_OF` / `ADVANCED` drive the sectioned page. `defaults()` reads config.example.toml, used for the changed dots and Reset.
   - `POST /api/settings/preview {values, session}` runs `find_all` / `session_moments` with unsaved `spikes.*` / `clip.*` values next to the saved ones. It never writes.
   - All sections stay in the DOM, so unsaved edits survive switching.
+- Polish (Phase 5):
+  - `delete_clip()` moves the clip to `session/.trash/<clip>~<epoch>` and returns that id; `restore_clip()` undoes it; `purge_trash()` (hourly thread in server.py) removes clips older than `TRASH_DAYS` = 7.
+  - UI: `ask()` is the in-app `<dialog>` confirm, with Cancel focused for dangerous actions. `post()` marks the clicked button busy (spinner, aria-busy, no double run). `renderOnboard()` is the first-run checklist.
 - Needs attention: `attention()` / `/api/attention` collects failed jobs, recorder errors (bot check → cookies), failed clips (with a redo POST action), missing or full drives, missing tools and write problems. It also returns `new_clips` for the tab badge. The strip is shown on every tab.
 
 ## Timing rules (don't break)
@@ -81,7 +84,7 @@ Records a YouTube / Twitch / Kick live stream and its chat with no accounts or A
 ## Conventions
 - Don't call any LLM at runtime. Overnight runs must be free and offline-capable.
   - The one exception is `titles.py`: OpenRouter chat completions, default model `x-ai/grok-4.7`, sending only an `X-Title: clipperyt` header and no referer. It runs only when the user presses "Titles" on a clip and is never called from jobs. It's cached in `clips/<clip>/titles.json` with the cost. The description's credit and link are written by us, not the model. `/api/titles/models` serves the model picker.
-- UX roadmap: `docs/superpowers/specs/2026-11-19-ux-plan.md` (phases 1–4 built: review inbox + needs-attention, smart add box + edit, session timeline + manual clips, sectioned settings + detection preview; next: polish).
+- UX roadmap: `docs/superpowers/specs/2026-11-19-ux-plan.md` (all 5 phases built: review inbox + needs-attention, smart add box + edit, session timeline + manual clips, sectioned settings + detection preview, dialogs/undo/busy buttons/onboarding).
 - Keep the streamer credit (burned-in line + clips.md links).
 - Test offline with fakes: a synthetic `stream.ts` (ffmpeg testsrc2), synthetic chat TSV + meta.json, and a fake `streamlink`/`yt-dlp` on PATH. YouTube can't be reached from the sandbox that wrote this.
 
