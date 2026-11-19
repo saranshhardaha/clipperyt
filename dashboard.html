@@ -154,6 +154,13 @@ tr.click{cursor:pointer}tr.click:hover td{background:var(--panel2)}
 .ttl pre{margin:0;max-height:160px;white-space:pre-wrap;font:12.5px/1.45 var(--sans)}
 .ttl .faint{font-size:12px}
 .cookie{background:var(--panel2);border-radius:8px;padding:12px 14px;margin-bottom:16px}
+.ycode{font:600 30px/1.2 var(--mono);letter-spacing:.14em;color:var(--ink);margin:10px 0 6px}
+.ysteps{margin-top:10px}.ysteps summary{cursor:pointer;font-size:13.5px;color:var(--mute)}
+.ysteps ol{margin:8px 0 0;padding-left:20px;font-size:13.5px;line-height:1.55;color:var(--mute)}.ysteps li{margin:5px 0}.ysteps b{color:var(--ink)}
+.ysched{margin-top:12px;display:flex;flex-direction:column;gap:6px;font-size:13.5px}
+.ysched>.row{border-top:1px solid var(--rule);padding-top:6px;flex-wrap:nowrap}.ysched>.row>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.yup{display:inline-block;width:120px;height:6px;border-radius:3px;background:var(--rule2);overflow:hidden;vertical-align:middle}.yup i{display:block;height:100%;background:var(--cue);transition:width .4s}
+[data-ytp]{font-size:13px}[data-ytp]:empty{display:none}
 .sgrid{display:grid;grid-template-columns:210px minmax(0,1fr);gap:24px;align-items:start}
 .sgrid>div{min-width:0}.pv select{max-width:100%}
 .snav{position:sticky;top:118px;display:flex;flex-direction:column;gap:2px}
@@ -527,6 +534,7 @@ function renderOnboard(js){
     {done:(sysCache.totals||{}).sessions>0,t:'Wait for the first recording: clips show up in Review',btn:null},
     {done:!!(settings.cookies&&settings.cookies.set),opt:'only if YouTube asks “confirm you’re not a bot”',t:'Upload YouTube cookies',btn:'Open',go:()=>{sgroup='channels';setPref('sgroup','channels');show('settings')}},
     {done:!!v['titles.openrouter_api_key'],opt:'for title suggestions',t:'Add an OpenRouter key',btn:'Open',go:()=>{sgroup='titles';setPref('sgroup','titles');show('settings')}},
+    {done:!!(yt&&yt.connected),opt:'for one-click posting and scheduling',t:'Connect YouTube',btn:'Open',go:()=>{sgroup='youtube';setPref('sgroup','youtube');show('settings')}},
     {done:!!v['storage.sessions_dir'],opt:'if the app’s disk is small',t:'Record to a bigger drive',btn:'Open',go:()=>{sgroup='storage';setPref('sgroup','storage');show('settings')}},
   ];
   if(steps.slice(0,3).every(x=>x.done)){el.innerHTML='';return}  // set up: it goes away by itself
@@ -666,14 +674,16 @@ async function openSession(id,soft){
     c.innerHTML=d.clips.map(c=>`<div class="clip" data-clip="${esc(c.name)}">
       ${c.video?`<video src="${c.video}" controls preload="metadata" playsinline style="aspect-ratio:${c.vertical?'9/16':'16/9'}"></video>`:'<div class="failbox">This clip failed.<br>Press Fix to make it again. The job log has the reason.</div>'}
       <div class="row between"><span class="ch">${esc(clipTime(c.name))}</span>${c.requests?`<span class="flag req">Clip request ×${c.requests}</span>`:''}</div>
-      <div class="meta">${c.score!=null?`Score ${c.score}`:''}${c.messages?`, ${c.messages} messages`:''}${c.video&&c.review&&c.review.state!=='new'?` <span class="state ${c.review.state}">${stateWord[c.review.state]}</span>`:''}</div>
+      <div class="meta">${c.score!=null?`Score ${c.score}`:''}${c.messages?`, ${c.messages} messages`:''}${c.video&&c.review&&c.review.state!=='new'?` <span class="state ${c.review.state}">${ytWord(c.review)}</span>`:''}</div>
       <div class="t">${esc((c.top||[]).filter(t=>!t.startsWith('clip requested')).slice(0,3).join('  /  '))}</div>
       <div class="row">${c.video?`<a class="btn sm" href="${c.video}?download=1">Download</a>`:''}
       ${c.raw?`<a class="btn sm" href="${c.raw}?download=1">Raw</a>`:''}${c.srt?`<a class="btn sm" href="${c.srt}" target="_blank">Captions</a>`:''}
       ${c.video?`<button class="sm" data-ttl="${esc(id)}/${esc(c.name)}" title="Suggest YouTube Shorts titles with AI">Titles</button>`:''}
+      ${c.video?ytBtns(id+'/'+c.name,c.review):''}
       ${c.video&&!(c.review&&c.review.state==='posted')?`<button class="sm" data-posted="${esc(c.name)}">Mark posted</button>`:''}
       <button class="sm ${c.failed?'pri':''}" data-redo="${esc(c.name)}" ${d.busy||!s.has_source?'disabled':''} title="Cut, caption and render this clip again">${c.failed?'Fix':'Redo'}</button>
       <button class="sm quiet bad del" data-del="${esc(c.name)}" ${d.busy?'disabled':''}>Delete</button></div>
+      <div data-ytp="${esc(id)}/${esc(c.name)}">${ytProg(id+'/'+c.name)}</div>
       <div class="ttl" data-panel="${esc(id)}/${esc(c.name)}" hidden></div></div>`).join('')||'<div class="mut">No clips yet. Re-make clips, or tune Spike detection in Settings first.</div>';
     $('clips-slot').replaceWith(c);
   }
@@ -753,13 +763,14 @@ function clipCard(c){
   return `<div class="clip" data-key="${esc(c.session)}/${esc(c.name)}">
     <video src="${c.video}" controls preload="metadata" playsinline style="aspect-ratio:${c.vertical?'9/16':'16/9'}"></video>
     <div class="row between"><span class="ch">${esc(c.channel)}</span>${c.requests?`<span class="flag req">Clip request ×${c.requests}</span>`:''}</div>
-    <div class="meta">${esc(clipTime(c.name))}, made ${when}${c.score!=null?`, score ${c.score}`:''}${st!=='new'?` <span class="state ${st}">${stateWord[st]}</span>`:''}</div>
+    <div class="meta">${esc(clipTime(c.name))}, made ${when}${c.score!=null?`, score ${c.score}`:''}${st!=='new'?` <span class="state ${st}">${ytWord(c.review)}</span>`:''}</div>
     <div class="t">${esc((c.top||[]).join('  /  '))}</div>
-    <div class="row">${st!=='kept'&&st!=='posted'?`<button class="sm" data-rs="kept">Keep</button>`:''}${st!=='posted'?`<button class="sm" data-rs="posted">Mark posted</button>`:''}${st!=='skipped'&&st!=='posted'?`<button class="sm quiet" data-rs="skipped">Skip</button>`:''}
+    <div class="row">${ytBtns(c.session+'/'+c.name,c.review)}${st!=='kept'&&st!=='posted'?`<button class="sm" data-rs="kept">Keep</button>`:''}${st!=='posted'?`<button class="sm" data-rs="posted">Mark posted</button>`:''}${st!=='skipped'&&st!=='posted'?`<button class="sm quiet" data-rs="skipped">Skip</button>`:''}
       <a class="btn sm" href="${c.video}?download=1">Download</a>
       <button class="sm" data-ttl="${esc(c.session)}/${esc(c.name)}" title="Suggest YouTube Shorts titles with AI">Titles</button>
       <a class="btn sm" href="#sessions/${encodeURIComponent(c.session)}">Session</a>
       <button class="sm quiet bad del" data-cdel="${esc(c.session)}/${esc(c.name)}">Delete</button></div>
+    <div data-ytp="${esc(c.session)}/${esc(c.name)}">${ytProg(c.session+'/'+c.name)}</div>
     <div class="ttl" data-panel="${esc(c.session)}/${esc(c.name)}" hidden></div></div>`}
 function renderStates(counts){
   const all=Object.values(counts).reduce((a,b)=>a+b,0);
@@ -790,7 +801,8 @@ function renderOne(){
   rcur=c.session+'/'+c.name;
   const st=(c.review||{}).state||'new',key=rcur,t=titleCache[key]||c.titles;
   const chosen=(c.review||{}).title||(t&&t.titles[0])||'';
-  const stamp=st==='new'?'':`<span class="stamp ${st}">${stateWord[st]}${c.review.at?' '+(ago(c.review.at)==='just now'?'just now':ago(c.review.at)+' ago'):''}${c.review.url?` · <a href="${esc(c.review.url)}" target="_blank" rel="noopener">link</a>`:''}</span>`;
+  const sched=ytScheduled(c.review);
+  const stamp=st==='new'?'':`<span class="stamp ${st}">${sched?ytWord(c.review):stateWord[st]+(c.review.at?' '+(ago(c.review.at)==='just now'?'just now':ago(c.review.at)+' ago'):'')}${c.review.url?` · <a href="${esc(c.review.url)}" target="_blank" rel="noopener">${c.review.video_id?'open on YouTube':'link'}</a>`:''}</span>`;
   $('r-one').innerHTML=`<div class="rev">
     <div class="stage" id="r-stage"><video id="r-video" class="${c.vertical?'':'wide'}" src="${c.video}" controls autoplay playsinline preload="auto"></video></div>
     <div class="side">
@@ -810,8 +822,10 @@ function renderOne(){
         <div class="help" id="r-tmsg"></div>
       </div>
       <div class="acts"><button id="r-skip">Skip</button><a class="btn" href="${c.video}?download=1" style="justify-content:center;padding:11px 10px;font-size:15px">Download</a><button class="pri" id="r-keep">${st==='kept'||st==='posted'?'Kept':'Keep'}</button></div>
-      <div class="acts2">${st!=='posted'?`<button class="sm" id="r-posted">Mark posted</button>`:''}${st!=='new'?`<button class="sm quiet" id="r-reset">Back to new</button>`:''}
+      <div data-ytp="${esc(key)}">${ytProg(key)}</div>
+      <div class="acts2">${ytBtns(key,c.review)}${sched?`<button class="sm quiet" data-yt="unschedule" data-key="${esc(key)}">Unschedule</button>`:''}${st!=='posted'?`<button class="sm" id="r-posted">Mark posted</button>`:''}${st!=='new'?`<button class="sm quiet" id="r-reset">Back to new</button>`:''}
         <a class="btn sm" href="#sessions/${encodeURIComponent(c.session)}">Open session</a></div>
+      ${yt&&!yt.connected&&st==='kept'?'<div class="help">To post straight to YouTube, connect it once in Settings → YouTube.</div>':''}
       <div class="keys">Keys: <kbd>←</kbd><kbd>→</kbd> move <kbd>K</kbd> keep <kbd>S</kbd> skip <kbd>D</kbd> download <kbd>P</kbd> posted <kbd>Space</kbd> play</div>
     </div></div>`;
   $('r-prev').onclick=()=>step(-1);$('r-next').onclick=()=>step(1);
@@ -871,6 +885,68 @@ $('c-grid').onclick=async e=>{
 for(const id of['c-chan','c-sort','c-req'])$(id).onchange=()=>{ri=0;loadClips(false)};
 $('c-more').onclick=()=>loadClips(true);
 
+// ---------- YouTube posting (Post now / Schedule, only when pressed)
+let yt=null,ytT=0,ytActive=0;
+const ytBusy=u=>u&&(u.status==='queued'||u.status==='uploading');
+async function loadYT(){
+  const r=await j('/api/youtube');if(!r||r.error)return;
+  const first=!yt,before=ytActive;yt=r;ytActive=Object.values(r.uploads||{}).filter(ytBusy).length;
+  document.querySelectorAll('[data-ytp]').forEach(el=>el.innerHTML=ytProg(el.dataset.ytp));
+  if($('ytcard'))$('ytcard').outerHTML=ytCard();
+  if(before&&!ytActive||first&&yt.connected)ytRefreshClips();
+  if(before&&!ytActive)refreshAttention();
+  clearTimeout(ytT);if(ytActive||r.pending)ytT=setTimeout(loadYT,r.pending?3000:1500)}
+function ytRefreshClips(){if(tab==='clips')loadClips(false);else if(tab==='sessions'&&curSession){clipSig='';openSession(curSession,true)}}
+function ytScheduled(r){return !!(r&&r.video_id&&r.publish_at&&r.publish_at>new Date().toISOString().slice(0,19)+'Z')}
+function ytWhen(r){const s=yt&&yt.scheduled.find(x=>x.publish_at===r.publish_at);
+  return s?s.label:new Date(r.publish_at).toLocaleString([], {weekday:'short',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}
+function ytWord(r){r=r||{};return ytScheduled(r)?`Scheduled for ${ytWhen(r)}`:r.video_id?'On YouTube':stateWord[r.state||'new']}
+function ytBtns(key,r){
+  if(!yt||!yt.connected||(r&&r.video_id)||ytBusy(yt.uploads[key]))return'';
+  return `<button class="sm" data-yt="post" data-key="${esc(key)}" title="Upload now as a ${esc(yt.privacy)} Short">Post now</button>`+
+    (yt.next_slot?`<button class="sm" data-yt="schedule" data-key="${esc(key)}" title="Uploads now as private; YouTube publishes it at this time">Schedule for ${esc(yt.next_slot.label)}</button>`:'')}
+function ytProg(key){
+  const u=yt&&yt.uploads[key];if(!u)return'';
+  if(u.status==='queued')return'<span class="mut">Waiting to upload…</span>';
+  if(u.status==='uploading'){const p=u.total?Math.floor(100*u.done/u.total):0;return`<span class="yup"><i style="width:${p}%"></i></span> <span class="mut">Uploading ${p}%${u.publish_at?', scheduled':''}</span>`}
+  if(u.status==='error')return`<span class="err">Upload failed: ${esc(u.error)}</span> <button class="sm quiet" data-yt="clear" data-key="${esc(key)}">Dismiss</button>`;
+  return''}
+function ytCard(){
+  const y=yt||{};let body;
+  if(y.connected)body=`<div class="row between"><div><b>YouTube</b><div style="font-size:13px;margin-top:2px"><span class="okc">✓ Connected to ${esc(y.channel||'your channel')}</span>${y.next_slot?` <span class="faint">· next free slot ${esc(y.next_slot.label)}</span>`:''}</div></div>
+      <button class="sm quiet bad" id="yt-off">Disconnect</button></div>
+    ${(y.scheduled||[]).length?`<div class="ysched"><div class="faint">Scheduled (${y.scheduled.length})</div>${y.scheduled.map(x=>`<div class="row between"><span title="${esc(x.title||'')}">${esc(x.label)} · ${esc(x.channel)} · ${esc(x.title||clipTime(x.name))}</span>
+      <span class="row" style="flex:none">${x.url?`<a class="btn sm" href="${esc(x.url)}" target="_blank" rel="noopener">Open</a>`:''}<button class="sm quiet" data-yt="unschedule" data-key="${esc(x.key)}">Unschedule</button></span></div>`).join('')}</div>`
+      :'<div class="help">Nothing scheduled. Press Schedule on a clip in Review: it goes into the next free slot below.</div>'}`;
+  else if(y.pending)body=`<b>Connect YouTube</b><div class="ycode" aria-label="Code">${esc(y.pending.user_code)}</div>
+    <div class="help">On any phone or computer, open <a href="${esc(y.pending.url)}" target="_blank" rel="noopener">${esc(y.pending.url.replace(/^https?:\/\//,''))}</a>, sign in with the Google account that owns the channel, and enter this code. It works for ${Math.max(1,Math.ceil(y.pending.left/60))} more minutes. This page updates by itself.</div>`;
+  else body=`<div class="row between"><div><b>YouTube</b><div style="font-size:13px;margin-top:2px">${y.configured?'<span class="mut">Not connected.</span>':'<span class="mut">Not set up yet. It takes about 10 minutes, once.</span>'}</div></div>
+      ${y.configured?'<button class="sm pri" id="yt-on">Connect YouTube</button>':''}</div>
+    ${y.error?`<div class="err" style="font-size:13px;margin-top:6px">${esc(y.error)}</div>`:''}
+    <details class="ysteps" ${y.configured?'':'open'}><summary>One-time setup in Google Cloud</summary><ol>
+      <li>Open <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">console.cloud.google.com</a> and create a project (any name).</li>
+      <li>APIs &amp; Services → Library: enable <b>YouTube Data API v3</b>.</li>
+      <li>OAuth consent screen: choose <b>External</b>, give it a name and your email, and add your Google account as a test user. Then press <b>Publish app</b> so it says “In production”; in Testing, the sign-in stops working after 7 days. When you connect, Google warns the app isn't verified: that's expected for your own app, press Continue.</li>
+      <li>Credentials → Create credentials → OAuth client ID, type <b>TVs and Limited Input devices</b>. Paste its client ID and secret below and press Save settings.</li>
+      <li>Press <b>Connect YouTube</b> here and enter the code it shows on google.com/device.</li></ol></details>`;
+  return `<div class="cookie" id="ytcard">${body}</div>`}
+$('settings').addEventListener('click',async e=>{
+  if(e.target.id==='yt-on'){
+    if(dirty){toast('Save settings first, then Connect');return}
+    const r=await post('/api/youtube/connect');if(r.error){toast(r.error);return}loadYT()}
+  if(e.target.id==='yt-off'){
+    if(!await ask('Disconnect YouTube?','This app forgets the sign-in. Videos already on YouTube, including scheduled ones, stay there.','Disconnect',true))return;
+    const r=await post('/api/youtube/disconnect');toast(r.result||r.error);loadYT()}});
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('[data-yt]');if(!b)return;e.stopPropagation();
+  const act=b.dataset.yt,key=b.dataset.key,[sid,name]=key.split('/');
+  const title=rcur===key&&$('r-title')?$('r-title').value.trim():'';
+  if(act==='post'&&!await ask('Post to YouTube now?',`${title?`“${title}”`:'This clip'} goes up now as a ${yt.privacy} Short on ${yt.channel||'your channel'}.`,'Post now'))return;
+  if(act==='unschedule'&&!await ask('Unschedule this clip?','The private video is deleted from YouTube before it goes public, and the clip goes back to Kept.','Unschedule',true))return;
+  const r=await post(`/api/sessions/${sid}/clips/${name}/${act==='clear'?'clear-upload':act}`,{title:title||undefined});
+  if(act!=='clear')toast(r.result||r.error);
+  await loadYT();if(act!=='clear')ytRefreshClips()});
+
 // ---------- needs attention (every tab)
 let attnOpen=pref('attnOpen','0')==='1',attnSig='';
 async function refreshAttention(){
@@ -887,6 +963,7 @@ async function refreshAttention(){
     if(x.post){btn.disabled=true;const r=await post(x.post,{});toast(r.error||x.done||'Started');attnSig='';refreshAttention();return}
     if(x.filter&&x.go==='jobs'){jfilter=x.filter;setPref('jfilter',jfilter);jobsSig=''}
     if(x.anchor==='cookies'){sgroup='channels';setPref('sgroup','channels')}
+    if(x.anchor==='youtube'){sgroup='youtube';setPref('sgroup','youtube')}
     show(x.go);if(x.anchor==='cookies')setTimeout(()=>{const ck=document.querySelector('.cookie');if(ck)ck.scrollIntoView({behavior:'smooth',block:'center'})},400)};
 }
 
@@ -926,9 +1003,10 @@ async function loadSettings(){
     return `<section class="card" data-g="${g}" ${g===sgroup?'':'hidden'}><h2>${esc(title)}</h2><div class="help">${esc(help)}</div>
       ${g==='detection'?'<div class="pv" id="pv"><span class="faint">Change a value to see what it would find.</span></div>':''}
       ${g==='channels'?cookieCard(settings.cookies):''}
+      ${g==='youtube'?ytCard():''}
       <div class="form">${basic.map(field).join('')}</div>
       ${adv.length?`<details class="adv"><summary>Advanced (${adv.length})</summary><div class="form">${adv.map(field).join('')}</div></details>`:''}</section>`}).join('');
-  renderSnav();showGroup(sgroup);
+  renderSnav();showGroup(sgroup);loadYT();
   if(!$('or-models')){const dl=document.createElement('datalist');dl.id='or-models';document.body.appendChild(dl);
     j('/api/titles/models').then(ms=>{if(Array.isArray(ms))dl.innerHTML=ms.map(m=>`<option value="${esc(m.id)}">${esc(m.name)}, $${m.in} / $${m.out} per million tokens</option>`).join('')})}
 }
@@ -1053,6 +1131,6 @@ addEventListener('hashchange',fromHash);
   const [a,js]=await Promise.all([j('/api/attention'),j('/api/jobs')]);
   if(!moved()&&a&&a.new_clips&&Array.isArray(js)&&!js.some(x=>x.state.status==='live'))show('clips')})();
 loadSettings();loadSystem().then(refreshJobs);refreshJobs();
-setInterval(tick,3000);refreshAttention();setInterval(refreshAttention,15000);setInterval(()=>{if(tab==='sessions'&&!curSession)loadSessions();if(tab==='system')loadSystem();else j('/api/system').then(s=>{if(!s.error){sysCache=s;permBanner(s)}})},20000);
+setInterval(tick,3000);refreshAttention();loadYT();setInterval(()=>{refreshAttention();if(!ytActive&&!(yt&&yt.pending))loadYT()},15000);setInterval(()=>{if(tab==='sessions'&&!curSession)loadSessions();if(tab==='system')loadSystem();else j('/api/system').then(s=>{if(!s.error){sysCache=s;permBanner(s)}})},20000);
 </script>
 </body></html>

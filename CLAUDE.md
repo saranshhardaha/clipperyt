@@ -74,6 +74,11 @@ Records a YouTube / Twitch / Kick live stream and its chat with no accounts or A
   - UI: `ask()` is the in-app `<dialog>` confirm, with Cancel focused for dangerous actions. `post()` marks the clicked button busy (spinner, aria-busy, no double run). `renderOnboard()` is the first-run checklist.
 - Needs attention: `attention()` / `/api/attention` collects failed jobs, recorder errors (bot check → cookies), failed clips (with a redo POST action), missing or full drives, missing tools and write problems. It also returns `new_clips` for the tab badge. The strip is shown on every tab.
 
+- YouTube posting: `youtube.py` (stdlib). Google device-flow sign-in (OAuth client type "TVs and Limited Input devices", scope `youtube`), token in `HOME/youtube-token.json` (0600, gitignored), resumable chunked upload, `next_slot()` from `[youtube]` window/gap/slots_per_day/timezone. Scheduled = uploaded now as private + `status.publishAt`.
+  - server.py: `/api/youtube` (status, next slot, scheduled list, uploads), `/api/youtube/connect|disconnect`, `POST …/clips/<name>/post|schedule|unschedule|clear-upload`. One upload at a time (`yt_worker` thread, `UPLOADS` progress). Done uploads write `review.json` state posted + video_id/url/publish_at; unschedule deletes the video and sets kept. Failed uploads show in Needs attention.
+  - UI: Settings → YouTube (setup steps, Connect with code, scheduled list); Post now / Schedule for <slot> on Review and session clips. Only runs when pressed; never from jobs.
+  - Tests: `tests/test_youtube.py` (fake Google). Not yet checked against real Google.
+
 ## Timing rules (don't break)
 - Live sessions: `meta.rec_start_ms` = the moment the first video bytes hit disk, by local clock.
   - Chat lines are `epoch_ms<TAB>author<TAB>text`, with real epoch times. YouTube uses YouTube's `timestampUsec`; Twitch and Kick use local receive time.

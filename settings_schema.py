@@ -126,6 +126,20 @@ SCHEMA: list[dict] = [
     {"key": "titles.style", "type": "str", "label": "Style notes (optional)",
      "help": "e.g. \"mention GTA RP\", \"no emojis\", \"always add the streamer's name\"."},
 
+    # ---- youtube (posting) — only when you press Post or Schedule
+    {"key": "youtube.client_id", "type": "str", "label": "OAuth client ID",
+     "help": "From Google Cloud → Credentials → OAuth client of type “TVs and Limited Input devices”."},
+    {"key": "youtube.client_secret", "type": "secret", "label": "OAuth client secret"},
+    {"key": "youtube.privacy", "type": "enum", "options": ["public", "unlisted", "private"], "label": "Post now as",
+     "help": "Scheduled posts are uploaded private and YouTube makes them public at the slot time."},
+    {"key": "youtube.slots_per_day", "type": "int", "min": 1, "label": "Scheduled posts per day"},
+    {"key": "youtube.slot_gap_hours", "type": "float", "min": 0.25, "label": "Hours between scheduled posts"},
+    {"key": "youtube.window_start", "type": "str", "label": "Post from (HH:MM)"},
+    {"key": "youtube.window_end", "type": "str", "label": "Post until (HH:MM)"},
+    {"key": "youtube.timezone", "type": "str", "label": "Time zone", "help": "e.g. Asia/Kolkata"},
+    {"key": "youtube.category_id", "type": "str", "label": "Category id", "help": "20 = Gaming."},
+    {"key": "youtube.made_for_kids", "type": "bool", "label": "Made for kids", "help": "Leave off for stream clips."},
+
     # ---- limits
     {"key": "limits.max_parallel_processing", "type": "int", "min": 1, "label": "Clip jobs at once",
      "help": "How many streams can be cut + transcribed + rendered at the same time. 1 is safest for whisper."},
@@ -137,17 +151,19 @@ GROUPS = [
     ("clips", "Clips & captions", "Where clips start, how long they are, and their captions."),
     ("output", "Output", "The shape and look of the finished Shorts."),
     ("titles", "Titles (AI)", "Title suggestions through OpenRouter, only when you press Titles on a clip."),
+    ("youtube", "YouTube", "Post clips as Shorts with one click, or schedule them into time slots."),
     ("channels", "Channels & recording", "Default channels, YouTube cookies, and how streams are recorded."),
     ("storage", "Storage & limits", "Where recordings go and how much runs at once."),
     ("file", "Config file", "Edit config.toml directly."),
 ]
 GROUP_OF = {"spikes": "detection", "clip": "clips", "captions": "clips", "render": "output", "titles": "titles",
-            "stream": "channels", "storage": "storage", "limits": "storage"}
+            "stream": "channels", "storage": "storage", "limits": "storage", "youtube": "youtube"}
 ADVANCED = {"spikes.bucket_seconds", "spikes.baseline_seconds", "spikes.warmup_seconds", "spikes.merge_seconds",
             "spikes.hype_weight", "spikes.clip_boost", "captions.whisper_bin", "captions.model", "render.encoder",
             "render.font", "stream.options.quality", "stream.options.retry_seconds", "stream.options.kick_chatroom_id",
             "stream.options.cookies_from_browser", "stream.options.twitch_oauth_token", "storage.also_scan",
-            "storage.wait_for_drive_seconds", "stream.record_from"}
+            "storage.wait_for_drive_seconds", "stream.record_from", "youtube.category_id", "youtube.made_for_kids",
+            "youtube.timezone"}
 for _f in SCHEMA:
     _f["group"] = GROUP_OF[_f["key"].split(".")[0]]
     _f["adv"] = _f["key"] in ADVANCED
@@ -165,7 +181,7 @@ def defaults() -> dict:
 
 
 SECTION_TITLES = {"stream": "Stream defaults", "spikes": "Spike detection", "clip": "Clips",
-                  "captions": "Captions", "render": "Render", "storage": "Storage", "titles": "Titles (AI)", "limits": "Limits"}
+                  "captions": "Captions", "render": "Render", "storage": "Storage", "titles": "Titles (AI)", "youtube": "YouTube", "limits": "Limits"}
 BY_KEY = {f["key"]: f for f in SCHEMA}
 LEGACY = {"render.vertical", "render.mode"}  # superseded by render.format
 

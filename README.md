@@ -170,6 +170,22 @@ Captions are timed to the words, not to whisper's long blocks, which used to sta
 - It only runs when you press the button, so recording and clipping never call it and overnight runs stay free.
 - Results and their cost are saved with the clip. **Suggest again** asks for new ones.
 
+## Post to YouTube (one click, or scheduled)
+
+Clips can go straight to your channel as Shorts. Nothing is posted unless you press a button.
+- **Post now** uploads the clip with the title you picked (or the first AI suggestion), the description and #Shorts.
+- **Schedule for …** uploads it right away as private and YouTube makes it public at the next free slot. Slots come from **Settings → YouTube**: daily window (default 10:00–22:00), hours between posts and posts per day, in your time zone. Your machine can be off when it goes public.
+- **Unschedule** deletes the private video from YouTube and puts the clip back in Kept. Scheduled clips are listed in Settings → YouTube.
+- A failed upload shows in Needs attention.
+
+One-time setup (about 10 minutes, steps also shown in Settings → YouTube):
+1. In console.cloud.google.com create a project and enable **YouTube Data API v3**.
+2. OAuth consent screen: External, add your Google account as a test user, then **Publish app** ("In production"). In Testing, Google ends the sign-in after 7 days.
+3. Credentials → OAuth client ID of type **TVs and Limited Input devices**. Paste its ID and secret in Settings → YouTube and save.
+4. Press **Connect YouTube**, open google.com/device on any phone and enter the code. Google warns the app isn't verified; that's expected for your own app.
+
+The sign-in is stored in `youtube-token.json` next to config.toml (owner-only, gitignored). YouTube limits how many videos a channel can upload per day.
+
 ## Clip requests
 
 A moment also fires when at least 3 *different* chatters type a clip phrase within 20 s, even if chat isn't louder than usual.

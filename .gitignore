@@ -4,6 +4,7 @@ config.toml.bak
 config.toml.tmp
 .dashboard_token
 cookies*.txt
+youtube-token.json
 *.cookies.txt
 
 # runtime

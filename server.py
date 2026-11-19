@@ -34,6 +34,8 @@ import review
 import settings_schema
 import stats
 import titles
+import youtube
+import queue as _queue
 
 try:
     import tomllib
@@ -376,6 +378,161 @@ def all_clips(channel: str = "", requested: bool = False, sort: str = "stream",
             "counts": counts, "ai_ready": bool(cfg.get("openrouter_api_key") or os.environ.get("OPENROUTER_API_KEY"))}
 
 
+# ------------------------------------------------------------------ YouTube posting
+
+YT: dict = {"pending": None, "error": None}  # device sign-in in progress
+UPLOADS: dict[str, dict] = {}                # "sid/clip" → {status, done, total, error, url, publish_at}
+_upq: "_queue.Queue[dict]" = _queue.Queue()
+_yt_lock = threading.Lock()
+
+
+def yt_cfg() -> dict:
+    return clipper.load_cfg()["youtube"]
+
+
+def scheduled_clips() -> list[dict]:
+    """Clips uploaded with a future publish time (YouTube will publish them)."""
+    out, now = [], time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    for d in all_session_dirs():
+        for _, _, c in clipper.clip_folders(d):
+            r = review.get(c)
+            if r.get("publish_at") and r["publish_at"] > now:
+                try:
+                    ch = json.loads((d / "meta.json").read_text()).get("channel", "?")
+                except Exception:
+                    ch = "?"
+                out.append({"key": f"{d.name}/{c.name}", "session": d.name, "name": c.name, "channel": ch,
+                            "publish_at": r["publish_at"], "label": youtube.local_label(yt_cfg(), r["publish_at"]),
+                            "url": r.get("url"), "title": r.get("title")})
+    return sorted(out, key=lambda x: x["publish_at"])
+
+
+def yt_status() -> dict:
+    cfg = yt_cfg()
+    tok = youtube.load_token(HOME) or {}
+    configured = bool(str(cfg.get("client_id") or "").strip() and str(cfg.get("client_secret") or "").strip())
+    p = YT["pending"]
+    sched = scheduled_clips()
+    nxt = None
+    if configured:
+        try:
+            iso = youtube.next_slot(cfg, [x["publish_at"] for x in sched] +
+                                    [u["publish_at"] for u in UPLOADS.values() if u.get("publish_at") and u["status"] in ("queued", "uploading")])
+            nxt = {"iso": iso, "label": youtube.local_label(cfg, iso)}
+        except youtube.YouTubeError:
+            pass
+    return {"configured": configured, "connected": bool(tok.get("refresh_token")),
+            "channel": tok.get("channel_title"), "error": YT["error"], "privacy": cfg.get("privacy") or "public",
+            "pending": {"user_code": p["user_code"], "url": p["verification_url"],
+                        "left": max(0, int(p["expires_at"] - time.time()))} if p else None,
+            "next_slot": nxt, "scheduled": sched, "uploads": UPLOADS}
+
+
+def yt_connect() -> dict:
+    cfg = yt_cfg()
+    flow = youtube.start_device_flow(cfg)
+    YT.update(error=None, pending={**flow, "expires_at": time.time() + int(flow.get("expires_in", 1800))})
+
+    def poll():
+        interval = max(2, int(flow.get("interval", 5)))
+        while YT["pending"] and YT["pending"]["device_code"] == flow["device_code"]:
+            time.sleep(interval)
+            try:
+                tok = youtube.poll_device_flow(cfg, flow["device_code"])
+            except youtube.YouTubeError as e:
+                YT.update(pending=None, error=str(e))
+                return
+            if tok:
+                youtube.save_token(HOME, tok)
+                try:
+                    tok.update(youtube.channel_info(cfg, HOME))
+                    youtube.save_token(HOME, tok)
+                    YT.update(pending=None, error=None)
+                except youtube.YouTubeError as e:
+                    YT.update(pending=None, error=str(e))
+                return
+            if time.time() > YT["pending"]["expires_at"]:
+                YT.update(pending=None, error="The sign-in code expired. Press Connect again.")
+                return
+    threading.Thread(target=poll, daemon=True).start()
+    return yt_status()
+
+
+def _clip_title_desc(d: Path, c: Path, title: str | None) -> tuple[str, str, list[str]]:
+    meta = json.loads((d / "meta.json").read_text())
+    t = titles.cached(c) or {}
+    r = review.get(c)
+    title = (title or r.get("title") or (t.get("titles") or [None])[0] or f"{meta.get('channel', 'Stream')} clip").strip()
+    tags = [x for x in (t.get("hashtags") or []) if x]
+    desc = t.get("description") or (titles.credit_description(meta) + "\n\n" + " ".join("#" + x for x in tags + ["Shorts"]))
+    if "#Shorts" not in desc:
+        desc += " #Shorts"
+    return title, desc, tags + [str(meta.get("channel", "")).lstrip("@"), "Shorts"]
+
+
+def yt_worker() -> None:
+    while True:
+        job = _upq.get()
+        key, st = job["key"], UPLOADS.get(job["key"])
+        if st is None or st.get("status") != "queued":  # cleared before it started
+            continue
+        try:
+            d = clipper.find_session(job["sid"])
+            c = d / "clips" / job["name"] if d else None
+            video = next((c / f for f in ("short.mp4", "captioned.mp4") if c and (c / f).exists()), None)
+            if not video:
+                raise youtube.YouTubeError("The clip's video is gone (deleted or re-made). Nothing was uploaded.")
+            title, desc, tags = _clip_title_desc(d, c, job.get("title"))
+            st.update(status="uploading", total=video.stat().st_size, done=0)
+            res = youtube.upload(yt_cfg(), HOME, video, title, desc, tags, job.get("publish_at"),
+                                 lambda done, total: st.update(done=done, total=total))
+            review.put(c, "posted", title=title, url=res["url"], video_id=res["id"], privacy=res["privacy"],
+                       publish_at=res["publish_at"])
+            st.update(status="done", url=res["url"], publish_at=res["publish_at"])
+        except Exception as e:  # keep the worker alive whatever happens
+            st.update(status="error", error=str(e) if isinstance(e, youtube.YouTubeError) else f"{type(e).__name__}: {e}")
+
+
+def yt_post(sid: str, name: str, title: str | None, schedule: bool) -> tuple[int, dict]:
+    d = clipper.find_session(sid)
+    c = d / "clips" / name if d else None
+    if not c or not clipper.CLIP_RE.match(name) or not any((c / f).exists() for f in ("short.mp4", "captioned.mp4")):
+        return 404, {"error": "no such clip (or it has no video yet)"}
+    key = f"{sid}/{name}"
+    if UPLOADS.get(key, {}).get("status") in ("queued", "uploading"):
+        return 400, {"error": "already uploading"}
+    if review.get(c).get("video_id"):
+        return 400, {"error": "already on YouTube — open it from the clip's link"}
+    st = yt_status()
+    if not st["connected"]:
+        return 400, {"error": "Connect YouTube first in Settings → YouTube."}
+    with _yt_lock:
+        publish_at = None
+        if schedule:
+            if not st["next_slot"]:
+                return 400, {"error": "No free posting slot. Widen the window in Settings → YouTube."}
+            publish_at = st["next_slot"]["iso"]
+        UPLOADS[key] = {"status": "queued", "done": 0, "total": 0, "error": None, "url": None, "publish_at": publish_at}
+        _upq.put({"key": key, "sid": sid, "name": name, "title": title, "publish_at": publish_at})
+    when = f" for {youtube.local_label(yt_cfg(), publish_at)}" if publish_at else ""
+    return 200, {"result": f"Uploading{when}…", "publish_at": publish_at}
+
+
+def yt_unschedule(sid: str, name: str) -> tuple[int, dict]:
+    d = clipper.find_session(sid)
+    c = d / "clips" / name if d else None
+    r = review.get(c) if c and c.is_dir() else {}
+    if not r.get("video_id") or not r.get("publish_at"):
+        return 400, {"error": "that clip isn't scheduled"}
+    try:
+        youtube.delete_video(yt_cfg(), HOME, r["video_id"])
+    except youtube.YouTubeError as e:
+        return 400, {"error": str(e)}
+    review.put(c, "kept", url=None, video_id=None, publish_at=None, privacy=None)
+    UPLOADS.pop(f"{sid}/{name}", None)
+    return 200, {"result": "Unscheduled: the video was removed from YouTube and the clip is back in Kept"}
+
+
 def attention() -> dict:
     """Everything that needs the user, each with the action that fixes it."""
     items: list[dict] = []
@@ -417,6 +574,12 @@ def attention() -> dict:
     if t.get("yt-dlp", {}).get("path") and not (t.get("yt-dlp-js") or {}).get("runtime"):
         items.append({"level": "warn", "text": "YouTube links may fail (“No video formats found”): yt-dlp has no JS runtime",
                       "action": {"label": "How to fix", "go": "system"}})
+    for key, u in list(UPLOADS.items()):
+        if u.get("status") == "error":
+            items.append({"level": "bad", "text": f"YouTube upload of {key} failed: {u.get('error')}",
+                          "action": {"label": "Open Review", "go": "clips"}})
+    if YT.get("error"):
+        items.append({"level": "warn", "text": f"YouTube: {YT['error']}", "action": {"label": "Open", "go": "settings", "anchor": "youtube"}})
     for p in write_problems():
         items.append({"level": "bad", "text": f"The dashboard can't write to {p}. New jobs will fail.",
                       "action": {"label": "How to fix", "go": "system"}})
@@ -681,6 +844,8 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, sessions())
         if path == "/api/parse":  # the "add a channel or link" box previews what you'll get
             return self.send(200, clipper.parse_target(q.get("text", [""])[0]))
+        if path == "/api/youtube":
+            return self.send(200, yt_status())
         if path == "/api/titles/models":
             try:
                 return self.send(200, titles.models())
@@ -857,6 +1022,27 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/settings":
             code, body = save_settings(data.get("values") or {})
             return self.send(code, body)
+        if path == "/api/youtube/connect":
+            try:
+                return self.send(200, yt_connect())
+            except youtube.YouTubeError as e:
+                return self.send(400, {"error": str(e)})
+        if path == "/api/youtube/disconnect":
+            youtube.forget(HOME)
+            YT.update(pending=None, error=None)
+            return self.send(200, {"result": "YouTube disconnected", **yt_status()})
+        if m := re.fullmatch(r"/api/sessions/([\w-]+)/clips/([\w-]+)/(post|schedule|unschedule|clear-upload)", path):
+            sid, name, act = m[1], m[2], m[3]
+            if not self.session_or_404(sid):
+                return
+            if act == "unschedule":
+                code, body = yt_unschedule(sid, name)
+            elif act == "clear-upload":
+                UPLOADS.pop(f"{sid}/{name}", None)
+                code, body = 200, {"result": "ok"}
+            else:
+                code, body = yt_post(sid, name, data.get("title"), act == "schedule")
+            return self.send(code, body)
         if path == "/api/settings/preview":
             code, body = settings_preview(data.get("values") or {}, str(data.get("session") or ""))
             return self.send(code, body)
@@ -948,6 +1134,7 @@ def main() -> None:
     for d in (clipper.DEFAULT_SESSIONS, JOBS, clipper.LOGS):
         d.mkdir(parents=True, exist_ok=True)
     mover.cleanup_partial()
+    threading.Thread(target=yt_worker, daemon=True).start()
 
     def purge_loop():  # deleted clips stay restorable for clipper.TRASH_DAYS days
         while True:

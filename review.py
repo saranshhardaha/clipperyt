@@ -19,11 +19,16 @@ def get(clip: Path) -> dict:
     return {"state": "new"}
 
 
-def put(clip: Path, state: str, title: str | None = None, url: str | None = None) -> dict:
+def put(clip: Path, state: str, title: str | None = None, url: str | None = None, **extra) -> dict:
     if state not in STATES:
         raise ValueError(f"state must be one of {', '.join(STATES)}")
     r = get(clip)
     r.update(state=state, at=int(time.time()))
+    for k, v in extra.items():  # video_id / publish_at / privacy from a YouTube upload; None removes
+        if v is None:
+            r.pop(k, None)
+        else:
+            r[k] = v
     if title is not None:
         r["title"] = str(title)[:200]
     if url is not None:

@@ -102,6 +102,21 @@ model = "x-ai/grok-4.7"     # any OpenRouter model id
 language = "hinglish"       # "hinglish", "english" or "hindi"
 style = ""                  # optional notes, e.g. "mention GTA RP"
 
+[youtube]
+# Post clips as Shorts with one click, or schedule them into time slots. One-time setup:
+# Settings → YouTube in the dashboard walks through it (Google Cloud OAuth client of type
+# "TVs and Limited Input devices"). Only used when you press Post or Schedule.
+client_id = ""
+client_secret = ""
+privacy = "public"          # for "Post now": public, unlisted or private
+slots_per_day = 4           # scheduled posts per day
+slot_gap_hours = 3.0
+window_start = "10:00"
+window_end = "22:00"
+timezone = "Asia/Kolkata"
+category_id = "20"          # Gaming
+made_for_kids = false
+
 [limits]
 # How many streams can be cut + transcribed + rendered at the same time.
 # Recording is never limited; clipping waits for a free slot. 1 is safest for whisper.
