@@ -59,6 +59,8 @@ Records a YouTube / Twitch / Kick live stream and its chat with no accounts or A
 - Review (Phase 1 of the UX plan): `review.py` keeps a clip's state (new/kept/skipped/posted, plus the chosen title and URL) in `clips/<clip>/review.json`.
   - `/api/clips` (sort `stream` = newest session, then stream order; `state` filter; `counts`; `ai_ready`) feeds the Review tab, which has one-by-one and grid views. `POST …/clips/<name>/review` sets the state.
   - Keep auto-fetches titles when a key is set.
+- Add box (Phase 2): `clipper.parse_target(text)` → `watch` / `url` / `ask` (bare name) / `error`, served by `/api/parse`. The New job panel is one input plus channel chips (one per platform; `record_from` is the chip marked "records video").
+  - YouTube `/channel/UC…` ids work: `stream_url()` and `chat_youtube.video_id()` use `/channel/<id>/live`.
 - Needs attention: `attention()` / `/api/attention` collects failed jobs, recorder errors (bot check → cookies), failed clips (with a redo POST action), missing or full drives, missing tools and write problems. It also returns `new_clips` for the tab badge. The strip is shown on every tab.
 
 ## Timing rules (don't break)

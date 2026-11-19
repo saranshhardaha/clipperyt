@@ -90,6 +90,16 @@ code{font:12.5px var(--mono)}
 .filters button b{color:var(--ink);font-weight:600;margin-left:2px}
 .filters button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}.filters button.on b{color:var(--bg)}
 .newjob{border-color:var(--rule2)}
+.addbox{display:flex;gap:8px;margin-top:12px}
+.addbox input{font-size:15px;padding:10px 12px}
+.nj-preview{min-height:22px;margin-top:8px;font-size:13.5px;color:var(--mute);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.nj-preview.ok{color:var(--ink)}.nj-preview.bad{color:var(--bad)}
+.nj-preview .kind{font-weight:600}
+.nj-chans{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.chipx{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--rule2);border-radius:99px;padding:4px 6px 4px 12px;font-size:13.5px}
+.chipx b{font-weight:600}.chipx .vid{font-size:12px;color:var(--cue)}
+.chipx button{border:0;padding:2px 8px;border-radius:99px;font-size:12.5px;color:var(--mute)}
+.chipx button:hover{color:var(--ink)}
 .section{margin-top:26px}.section:first-of-type{margin-top:0}
 .section>h3{display:flex;align-items:baseline;gap:8px;font-size:14px;color:var(--ink);margin-bottom:4px}
 .section>h3 span{color:var(--faint);font-weight:500}
@@ -224,25 +234,16 @@ nav .badge{display:inline-block;min-width:18px;padding:0 6px;margin-left:6px;bor
     <button class="sm quiet" id="clear" hidden title="Remove failed or stopped one-link and fix/re-clip jobs. Their sessions and clips stay.">Clear failed</button>
     <button class="sm pri" id="newbtn" aria-expanded="false">New job</button></div>
   <div class="card newjob" id="newjob" hidden>
-    <div class="row between"><div class="seg" id="kind"><button data-k="watch" class="on">Watch channels</button><button data-k="url">One link</button></div>
+    <div class="row between"><h3 style="margin:0;color:var(--ink);font-size:15px">Add a channel or a link</h3>
       <button class="sm quiet" id="newclose">Close</button></div>
-    <div id="f-watch" style="margin-top:14px">
-      <div class="form">
-        <label class="f"><span>YouTube handle</span><input id="w-youtube" placeholder="without @"></label>
-        <label class="f"><span>Twitch login</span><input id="w-twitch" placeholder="twitch.tv/…"></label>
-        <label class="f"><span>Kick slug</span><input id="w-kick" placeholder="kick.com/…"></label>
-        <label class="f"><span>Record video from</span><select id="w-from"><option value="youtube">YouTube</option><option value="twitch">Twitch</option><option value="kick">Kick</option></select></label>
-      </div>
-      <div class="help">Chat from every channel you fill in is combined; the video is recorded once. The job waits for the stream, records it, makes clips, then waits for the next one.</div>
-    </div>
-    <div id="f-url" style="margin-top:14px" hidden>
-      <label class="f"><span>Stream or video link</span><input id="u-url" placeholder="https://www.youtube.com/watch?v=…   twitch.tv/videos/…   kick.com/…"></label>
-      <div class="help">A live or upcoming stream is recorded until it ends, then clipped. A finished video is downloaded with its chat replay, then clipped.</div>
-    </div>
+    <div class="addbox"><input id="nj-in" placeholder="Paste a channel or stream link, or type a channel name" autocomplete="off" spellcheck="false" aria-describedby="nj-preview">
+      <button id="nj-add" disabled>Add</button></div>
+    <div class="nj-preview" id="nj-preview" aria-live="polite"><span class="faint">youtube.com/@name · twitch.tv/name · kick.com/name to keep watching a channel; a video or stream link to clip just that one.</span></div>
+    <div class="nj-chans" id="nj-chans"></div>
     <div class="row" style="margin-top:14px">
       <input id="j-name" placeholder="Name (optional)" style="max-width:240px">
       <label class="switch"><input type="checkbox" id="j-auto"> Start again when the dashboard restarts</label>
-      <button class="pri" id="j-add">Start job</button><span id="j-msg" class="err"></span>
+      <button class="pri" id="j-add" disabled>Start watching</button><span id="j-msg" class="err"></span>
     </div>
   </div>
   <div class="filters" id="filters"></div>
@@ -303,7 +304,7 @@ const SAY={live:'On air',waiting:'Waiting for stream',starting:'Starting',queued
   downloading:'Downloading',idle:'Finishing',done:'Done',failed:'Failed',stopped:'Stopped'};
 const say=s=>SAY[s]||s;
 function tc(sec){sec=Math.max(0,Math.floor(sec));return[Math.floor(sec/3600),Math.floor(sec%3600/60),sec%60].map(x=>String(x).padStart(2,'0')).join(':')}
-let tab='jobs',settings=null,dirty=false,curSession=null,openLogs=new Set(),jobsSig='',kind='watch';
+let tab='jobs',settings=null,dirty=false,curSession=null,openLogs=new Set(),jobsSig='';
 
 async function j(u,o){let r;try{r=await fetch(u,o)}catch(e){return{error:'dashboard not reachable ('+e.message+')'}}let b={};try{b=await r.json()}catch(e){}if(!r.ok&&!b.error)b.error='HTTP '+r.status;return b}
 const post=(u,b)=>j(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});
@@ -326,23 +327,60 @@ function show(t){
 }
 
 // ---------- jobs
-$('kind').onclick=e=>{const b=e.target.closest('button');if(!b)return;kind=b.dataset.k;
-  for(const x of $('kind').children)x.classList.toggle('on',x===b);$('f-watch').hidden=kind!=='watch';$('f-url').hidden=kind!=='url'};
-// "Record video from" only offers platforms that have a channel filled in
-function syncFrom(){const sel=$('w-from'),filled=['youtube','twitch','kick'].filter(p=>$('w-'+p).value.trim());
-  for(const o of sel.options)o.disabled=filled.length>0&&!filled.includes(o.value);
-  if(filled.length&&!filled.includes(sel.value))sel.value=filled[0]}
-for(const p of['youtube','twitch','kick'])$('w-'+p).addEventListener('input',syncFrom);
-function newJob(open){$('newjob').hidden=!open;$('newbtn').setAttribute('aria-expanded',open);if(open)(kind==='url'?$('u-url'):$('w-youtube')).focus()}
+// "Add a channel or a link": one box. Channels collect as chips (one per platform; the first
+// records the video), a video/stream link makes a one-link job, a bare name asks for the platform.
+let nj={chans:[],video:0,parsed:null,t:0};
+function newJob(open){$('newjob').hidden=!open;$('newbtn').setAttribute('aria-expanded',open);if(open){njPrefill();$('nj-in').focus()}}
 $('newbtn').onclick=()=>newJob($('newjob').hidden);$('newclose').onclick=()=>newJob(false);
+function njPrefill(){  // the default channels from Settings → Stream defaults, if any
+  if(nj.chans.length||!settings)return;const v=settings.values;
+  for(const p of['youtube','twitch','kick']){const c=v['stream.channels.'+p];if(c&&c!=='CHANNEL_HANDLE')nj.chans.push({platform:p,channel:c})}
+  const rf=nj.chans.findIndex(c=>c.platform===v['stream.record_from']);nj.video=rf>0?rf:0;njRender()}
+function njRender(){
+  $('nj-chans').innerHTML=nj.chans.map((c,i)=>`<span class="chipx">${NAMES[c.platform]} <b>${esc(c.channel)}</b>
+    ${i===nj.video?'<span class="vid">records video</span>':nj.chans.length>1?`<button data-njv="${i}" title="Record the video from this platform">Use for video</button>`:''}
+    <button data-njx="${i}" aria-label="Remove ${NAMES[c.platform]} ${esc(c.channel)}">✕</button></span>`).join('');
+  const p=nj.parsed,url=p&&p.kind==='url';
+  $('j-add').textContent=url?'Clip this link':'Start watching';
+  $('j-add').disabled=!(url||nj.chans.length);
+  $('nj-in').placeholder=nj.chans.length?'Add Twitch or Kick for the same streamer (optional)':'Paste a channel or stream link, or type a channel name';
+  $('j-name').placeholder=url?'Name (optional)':nj.chans.length?`Name (default: ${nj.chans[nj.video].channel})`:'Name (optional)';
+}
+function njAddChan(platform,channel){
+  const at=nj.chans.findIndex(c=>c.platform===platform);
+  if(at>=0)nj.chans[at]={platform,channel};else nj.chans.push({platform,channel});
+  $('nj-in').value='';nj.parsed=null;njPreview();njRender();$('nj-in').focus()}
+function njPreview(){
+  const p=nj.parsed,el=$('nj-preview');$('nj-add').disabled=!(p&&p.kind==='watch');
+  if(!p){el.className='nj-preview';el.innerHTML=nj.chans.length>1?'<span class="faint">Chat from every channel is combined; the video is recorded once.</span>':'';return}
+  if(p.kind==='error'){el.className='nj-preview bad';el.textContent=p.label;return}
+  if(p.kind==='ask'){el.className='nj-preview ok';
+    el.innerHTML=`<span>${esc(p.label)}</span>`+['youtube','twitch','kick'].map(x=>`<button class="sm${p.guess===x?' pri':''}" data-njp="${x}">${NAMES[x]}</button>`).join('');return}
+  el.className='nj-preview ok';
+  el.innerHTML=p.kind==='watch'?`<span class="kind">${esc(p.label)}</span><span class="faint">Press Enter or Add${nj.chans.some(c=>c.platform===p.platform)?` (replaces the ${NAMES[p.platform]} channel)`:''}.</span>`
+    :`<span class="kind">${esc(p.label)}</span><span class="faint">It's recorded if live, or downloaded with its chat replay if finished.</span>`;
+}
+$('nj-in').addEventListener('input',()=>{clearTimeout(nj.t);const v=$('nj-in').value.trim();
+  if(!v){nj.parsed=null;njPreview();njRender();return}
+  nj.t=setTimeout(async()=>{const r=await j('/api/parse?text='+encodeURIComponent(v));if($('nj-in').value.trim()!==v)return;
+    nj.parsed=r.error?{kind:'error',label:r.error}:r;njPreview();njRender()},180)});
+$('nj-in').addEventListener('keydown',e=>{if(e.key!=='Enter')return;e.preventDefault();const p=nj.parsed;
+  if(p&&p.kind==='watch')njAddChan(p.platform,p.channel);else if(p&&p.kind==='url')$('j-add').click()});
+$('nj-add').onclick=()=>{const p=nj.parsed;if(p&&p.kind==='watch')njAddChan(p.platform,p.channel)};
+$('newjob').addEventListener('click',e=>{
+  const pk=e.target.closest('[data-njp]'),x=e.target.closest('[data-njx]'),v=e.target.closest('[data-njv]');
+  if(pk&&nj.parsed)njAddChan(pk.dataset.njp,nj.parsed.name);
+  if(x){nj.chans.splice(+x.dataset.njx,1);if(nj.video>=nj.chans.length)nj.video=0;njPreview();njRender()}
+  if(v){nj.video=+v.dataset.njv;njRender()}});
 $('j-add').onclick=async()=>{
-  const body={kind,name:$('j-name').value.trim(),autostart:$('j-auto').checked};
-  if(kind==='watch'){body.channels={youtube:$('w-youtube').value,twitch:$('w-twitch').value,kick:$('w-kick').value};body.record_from=$('w-from').value}
-  else body.url=$('u-url').value.trim();
-  $('j-msg').textContent='';const r=await post('/api/jobs',body);
-  if(r.error){$('j-msg').textContent=r.error;return}
-  toast(`${r.job.name}: ${r.result}`);$('u-url').value='';$('j-name').value='';newJob(false);refreshJobs();
-};
+  const p=nj.parsed,body={name:$('j-name').value.trim(),autostart:$('j-auto').checked};
+  if(p&&p.kind==='url'){body.kind='url';body.url=p.url}
+  else{body.kind='watch';body.channels=Object.fromEntries(nj.chans.map(c=>[c.platform,c.channel]));body.record_from=nj.chans[nj.video].platform}
+  $('j-msg').textContent='';$('j-add').disabled=true;const r=await post('/api/jobs',body);
+  if(r.error){$('j-msg').textContent=r.error;njRender();return}
+  toast(`${r.job.name}: ${r.result}`);
+  if(body.kind==='watch'){nj.chans=[];nj.video=0}
+  $('nj-in').value='';$('j-name').value='';nj.parsed=null;njPreview();njRender();newJob(false);refreshJobs()};
 $('clear').onclick=async()=>{const r=await post('/api/jobs/clear-finished');toast(r.result||r.error);refreshJobs()};
 
 function spark(arr){
@@ -430,7 +468,7 @@ async function refreshJobs(){
   if(sig!==jobsSig){
     jobsSig=sig;
     const logs={};document.querySelectorAll('pre[data-log]').forEach(p=>logs[p.dataset.log]=[p.textContent,p.scrollTop]);
-    $('jobs').innerHTML=js.length?renderJobs(js):'<div class="card empty">No jobs yet. Press <b>New job</b> to watch a channel or clip a single link.</div>';
+    $('jobs').innerHTML=js.length?renderJobs(js):'<div class="card empty">No jobs yet. Press <b>New job</b> and paste a channel or a stream link.</div>';
     document.querySelectorAll('pre[data-log]').forEach(p=>{const o=logs[p.dataset.log];if(o){p.textContent=o[0];p.scrollTop=o[1]}});
   }
   for(const id of openLogs)loadLog(id);
@@ -718,10 +756,6 @@ async function loadSettings(){
   if(dirty)return;settings=await j('/api/settings');$('raw').value=settings.toml;
   const bySec={};for(const f of settings.schema){const sec=f.key.split('.')[0];(bySec[sec]=bySec[sec]||[]).push(f)}
   $('settings').innerHTML=Object.entries(bySec).map(([sec,fs])=>`<section class="card"><h2>${esc(settings.sections[sec]||sec)}</h2>${sec==='stream'?cookieCard(settings.cookies):''}<div class="form">${fs.map(field).join('')}</div></section>`).join('');
-  // pre-fill new-job form defaults (only if empty)
-  const v=settings.values;for(const p of['youtube','twitch','kick']){const el=$('w-'+p);if(!el.value&&v['stream.channels.'+p]&&v['stream.channels.'+p]!=='CHANNEL_HANDLE')el.value=v['stream.channels.'+p]}
-  if(v['stream.record_from'])$('w-from').value=v['stream.record_from'];
-  syncFrom();
   if(!$('or-models')){const dl=document.createElement('datalist');dl.id='or-models';document.body.appendChild(dl);
     j('/api/titles/models').then(ms=>{if(Array.isArray(ms))dl.innerHTML=ms.map(m=>`<option value="${esc(m.id)}">${esc(m.name)}, $${m.in} / $${m.out} per million tokens</option>`).join('')})}
 }

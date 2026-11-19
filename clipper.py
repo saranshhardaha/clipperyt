@@ -376,7 +376,12 @@ def record_platform(s: dict) -> str:
     return p
 
 
+YT_CHANNEL_ID = re.compile(r"^UC[\w-]{22}$")
+
+
 def stream_url(platform: str, ch: str) -> str:
+    if platform == "youtube" and YT_CHANNEL_ID.match(ch):  # youtube.com/channel/UC… links
+        return f"https://www.youtube.com/channel/{ch}/live"
     return {"youtube": f"https://www.youtube.com/@{ch}/live",
             "twitch": f"https://www.twitch.tv/{ch}",
             "kick": f"https://kick.com/{ch}"}[platform]
@@ -1009,6 +1014,77 @@ def cmd_status() -> None:
 
 
 # ---------------------------------------------------------------- one URL (live or past)
+
+TWITCH_RESERVED = {"directory", "settings", "downloads", "jobs", "p", "search", "subscriptions", "inventory",
+                   "wallet", "drops", "friends", "messages", "turbo", "prime", "store", "videos", "user"}
+
+
+def parse_target(text: str) -> dict:
+    """What the user pasted into "Add a channel or link".
+
+    → {"kind": "watch", "platform", "channel", "label"}     a channel to keep watching
+    → {"kind": "url", "platform", "url", "label"}           one stream or past video
+    → {"kind": "ask", "name", "label"}                      a bare name: which platform?
+    → {"kind": "error", "label"}                            not something we can clip
+    """
+    t = (text or "").strip()
+    if not t:
+        return {"kind": "error", "label": ""}
+    if not re.match(r"^[a-z]+://", t, re.I) and re.match(r"^(www\.|m\.)?(youtube\.com|youtu\.be|twitch\.tv|kick\.com)/", t, re.I):
+        t = "https://" + t
+    m = re.match(r"^https?://([^/?#]+)(/[^?#]*)?(\?[^#]*)?", t, re.I)
+    if not m:
+        name = t.lstrip("@")
+        if re.fullmatch(r"[\w.-]{2,60}", name):
+            return {"kind": "ask", "name": name, "label": f"Which platform is “{name}” on?",
+                    "guess": "youtube" if t.startswith("@") else None}
+        return {"kind": "error", "label": "Paste a YouTube, Twitch or Kick link, or a channel name."}
+    host = re.sub(r"^(www|m|music)\.", "", m[1].lower())
+    parts = [p for p in (m[2] or "").split("/") if p]
+    query = dict(kv.split("=", 1) for kv in (m[3] or "?")[1:].split("&") if "=" in kv)
+    if host in ("youtube.com", "youtu.be"):
+        vid = None
+        if host == "youtu.be" and parts:
+            vid = parts[0]
+        elif parts[:1] == ["watch"] and query.get("v"):
+            vid = query["v"]
+        elif parts[:1] in (["live"], ["shorts"], ["embed"]) and len(parts) > 1:
+            vid = parts[1]
+        if vid and re.fullmatch(r"[\w-]{11}", vid):
+            return {"kind": "url", "platform": "youtube", "url": f"https://www.youtube.com/watch?v={vid}",
+                    "label": f"Clip one YouTube video or stream ({vid})"}
+        if parts and parts[0].startswith("@"):
+            h = parts[0][1:]
+            return {"kind": "watch", "platform": "youtube", "channel": h, "label": f"Watch YouTube channel @{h}"}
+        if parts[:1] == ["channel"] and len(parts) > 1 and YT_CHANNEL_ID.match(parts[1]):
+            return {"kind": "watch", "platform": "youtube", "channel": parts[1],
+                    "label": f"Watch YouTube channel {parts[1]}"}
+        if parts[:1] in (["c"], ["user"]) and len(parts) > 1:
+            return {"kind": "watch", "platform": "youtube", "channel": parts[1],
+                    "label": f"Watch YouTube channel @{parts[1]} (old-style link, so check the @handle is right)"}
+        return {"kind": "error", "label": "That YouTube link isn't a channel or a video."}
+    if host in ("twitch.tv", "clips.twitch.tv"):
+        if host == "clips.twitch.tv" or "clip" in parts[1:2]:
+            return {"kind": "error", "label": "Twitch clips are already clips. Paste the channel or a past broadcast (twitch.tv/videos/…)."}
+        if parts[:1] == ["videos"] and len(parts) > 1 and parts[1].isdigit():
+            return {"kind": "url", "platform": "twitch", "url": f"https://www.twitch.tv/videos/{parts[1]}",
+                    "label": f"Clip one past Twitch broadcast ({parts[1]})"}
+        if parts and parts[0].lower() not in TWITCH_RESERVED and re.fullmatch(r"\w{2,30}", parts[0]):
+            if len(parts) > 1 and parts[1] == "videos":
+                return {"kind": "watch", "platform": "twitch", "channel": parts[0].lower(),
+                        "label": f"Watch Twitch channel {parts[0].lower()}"}
+            return {"kind": "watch", "platform": "twitch", "channel": parts[0].lower(),
+                    "label": f"Watch Twitch channel {parts[0].lower()}"}
+        return {"kind": "error", "label": "That Twitch link isn't a channel or a past broadcast."}
+    if host == "kick.com":
+        if parts[:1] == ["video"] or (len(parts) > 1 and parts[1] == "videos"):
+            return {"kind": "error", "label": "Past Kick videos can't be clipped: Kick doesn't keep their chat. Watch the channel instead."}
+        if parts and re.fullmatch(r"[\w-]{2,40}", parts[0]):
+            return {"kind": "watch", "platform": "kick", "channel": parts[0].lower(),
+                    "label": f"Watch Kick channel {parts[0].lower()}"}
+        return {"kind": "error", "label": "That Kick link isn't a channel."}
+    return {"kind": "error", "label": "Only YouTube, Twitch and Kick links work."}
+
 
 def platform_of(url: str) -> str:
     host = re.sub(r"^www\.|^m\.", "", re.sub(r"^https?://", "", url).split("/")[0])

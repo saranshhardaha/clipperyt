@@ -82,7 +82,9 @@ def video_id(handle_or_url: str) -> str | None:
     try:
         auth = json.loads(os.environ.get("CLIPPER_YTDLP_AUTH") or "[]")  # cookies, set by clipper.py
         out = subprocess.run(["yt-dlp", *auth, "--no-warnings", "--skip-download", "--print", "id",
-                              f"https://www.youtube.com/@{handle_or_url.lstrip('@')}/live"],
+                              (f"https://www.youtube.com/channel/{handle_or_url}/live"
+                               if re.fullmatch(r"UC[\w-]{22}", handle_or_url)
+                               else f"https://www.youtube.com/@{handle_or_url.lstrip('@')}/live")],
                              capture_output=True, text=True, timeout=60)
         vid = out.stdout.strip().splitlines()
         return vid[0] if out.returncode == 0 and vid else None

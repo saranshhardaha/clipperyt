@@ -23,6 +23,11 @@ Add `--service` to either one to also start the dashboard automatically (systemd
 .venv/bin/python server.py        # http://<machine-ip>:8787
 ```
 
+- **Adding a job:** press **New job** and paste anything: a channel (`youtube.com/@name`, `youtube.com/channel/UC…`, `twitch.tv/name`, `kick.com/name`), a stream or video link (`youtube.com/watch?v=…`, `youtu.be/…`, `/live/…`, `/shorts/…`, `twitch.tv/videos/…`), or just a name.
+  - The box says what you'll get before you add it.
+  - Channels become chips, so you can add the same streamer's Twitch and Kick too and their chat is combined. The first chip records the video; click **Use for video** on another to switch.
+  - A bare name asks which platform it's on.
+  - Things that can't be clipped are explained, for example Twitch clips, and past Kick videos because Kick doesn't keep their chat.
 - **Jobs:** each job runs on its own, and as many as you like can run at once.
   - **Watch channels:** fill in the YouTube, Twitch and Kick names (any of them) and pick which one to record video from. The job waits for the stream to go live, records it and its chat, makes the clips, then waits for the next stream.
   - **One link:** a live or upcoming stream gets recorded until it ends, then clipped. A finished YouTube or Twitch video gets downloaded with its chat replay, then clipped.

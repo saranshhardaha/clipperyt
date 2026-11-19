@@ -647,6 +647,8 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"log": tail(JOBS / m[1] / "job.log", int(q.get("n", ["200"])[0]))})
         if path == "/api/sessions":
             return self.send(200, sessions())
+        if path == "/api/parse":  # the "add a channel or link" box previews what you'll get
+            return self.send(200, clipper.parse_target(q.get("text", [""])[0]))
         if path == "/api/titles/models":
             try:
                 return self.send(200, titles.models())
