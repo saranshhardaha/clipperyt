@@ -224,3 +224,12 @@ class RemakeKeepsPostedAndScheduled(RemakeFollowsSettings):
         self.assertEqual({c["name"]: c["locked"] for c in det["clips"]}, {one: "posted", two: "scheduled"})
         self.assertIn("unschedule", server.delete_session(self.s.name, False))
         self.assertTrue((self.s / "clips" / two).is_dir())
+        # a clip with a posting copy (e.g. a Post now still uploading) counts as scheduled too
+        (clipper.HOME / clipper.YT_QUEUE).unlink()
+        bk = clipper.backup_clip_dir(self.s.name, two)
+        bk.mkdir(parents=True)
+        try:
+            self.assertEqual(clipper.locked_clips(self.s), {one: "posted", two: "scheduled"})
+        finally:
+            import shutil
+            shutil.rmtree(clipper.HOME / clipper.POST_BACKUP)

@@ -86,12 +86,20 @@ SCHEMA: list[dict] = [
      "help": "Needs a non-turbo model, e.g. ggml-medium.bin."},
 
     # ---- render
-    {"key": "render.format", "type": "enum", "options": ["9:16-blur", "9:16-bars", "16:9", "9:16-crop"],
+    {"key": "render.format", "type": "enum", "options": ["9:16-blur", "9:16-bars", "9:16-facecam", "16:9", "9:16-crop"],
      "labels": {"9:16-blur": "9:16 · whole 16:9 frame, blurred fill",
                 "9:16-bars": "9:16 · whole 16:9 frame, black bars",
+                "9:16-facecam": "9:16 · facecam on top, gameplay below",
                 "16:9": "16:9 · original shape",
                 "9:16-crop": "9:16 · centre crop (cuts the sides)"},
-     "label": "Output shape", "help": "Both 9:16 fill modes keep the full 16:9 picture; nothing is cropped."},
+     "label": "Output shape", "help": "Both 9:16 fill modes keep the full 16:9 picture; nothing is cropped. "
+     "Facecam on top needs the camera's place marked once per channel: Facecam box on a session page."},
+    {"key": "render.facecam_height", "type": "float", "min": 0.2, "max": 0.6, "label": "Facecam height",
+     "help": "Share of the Short the camera takes on top, 0.2–0.6 (0.4 = 40%). Only for facecam on top."},
+    {"key": "render.facecam_game", "type": "enum", "options": ["fill", "whole"],
+     "labels": {"fill": "Fill: crop the gameplay to fill the space (bigger, cuts the sides)",
+                "whole": "Whole: the full gameplay frame, blurred fill around it"},
+     "label": "Gameplay under the facecam", "help": "Only for facecam on top."},
     {"key": "render.encoder", "type": "enum", "options": ["auto", "h264_videotoolbox", "h264_nvenc", "libx264"],
      "label": "Encoder", "help": "auto = Mac hardware → NVIDIA GPU → CPU."},
     {"key": "render.font_size", "type": "int", "min": 16, "label": "Caption size (px on 1080 wide)"},
@@ -249,6 +257,8 @@ def coerce(field: dict, v):
             raise ValueError(f"{label}: needs a number")
         if "min" in field and n < field["min"]:
             raise ValueError(f"{label}: must be ≥ {field['min']}")
+        if "max" in field and n > field["max"]:
+            raise ValueError(f"{label}: must be ≤ {field['max']}")
         if t == "int":
             if n != int(n):
                 raise ValueError(f"{label}: needs a whole number")

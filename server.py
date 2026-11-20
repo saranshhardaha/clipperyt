@@ -30,6 +30,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import clipper
 import mover
+import render
 import review
 import settings_schema
 import stats
@@ -533,20 +534,114 @@ def yt_worker() -> None:
         try:
             d = clipper.find_session(job["sid"])
             c = d / "clips" / job["name"] if d else None
-            video = next((c / f for f in ("short.mp4", "captioned.mp4") if c and (c / f).exists()), None)
+            b = clipper.backup_clip_dir(job["sid"], job["name"])
+            video = final_of(b) or final_of(c)  # the copy made when it was scheduled, if there is one
             if not video:
                 raise youtube.YouTubeError("The clip's video is gone (deleted or re-made). Nothing was uploaded.")
+            if c is None or not c.is_dir():  # session gone or its drive missing: everything from the copy
+                d, c = b.parent.parent, b
             title, desc, tags = _clip_title_desc(d, c, job.get("title"))
             st.update(status="uploading", total=video.stat().st_size, done=0)
             res = youtube.upload(yt_cfg(), HOME, video, title, desc, tags, job.get("publish_at"),
                                  lambda done, total: st.update(done=done, total=total))
-            review.put(c, "posted", title=title, url=res["url"], video_id=res["id"], privacy=res["privacy"],
-                       publish_at=res["publish_at"])
+            try:  # it's on YouTube now: a clip folder that vanished mid-upload mustn't turn that into a retry
+                review.put(c, "posted", title=title, url=res["url"], video_id=res["id"], privacy=res["privacy"],
+                           publish_at=res["publish_at"])
+            except OSError as e:
+                print(f"[youtube] posted {key} but couldn't mark the clip: {e}", flush=True)
             st.update(status="done", url=res["url"], publish_at=res["publish_at"])
             queue_done(key, True, url=res["url"], title=title)
+            drop_backup(job["sid"], job["name"])
         except Exception as e:  # keep the worker alive whatever happens
             st.update(status="error", error=str(e) if isinstance(e, youtube.YouTubeError) else f"{type(e).__name__}: {e}")
             queue_done(key, False, error=st["error"])
+
+
+FINALS = ("short.mp4", "captioned.mp4")
+BACKUP_KEEP = ("review.json", "titles.json", "moment.json", "chat.txt", "speech.srt")
+
+
+def final_of(c: Path | None) -> Path | None:
+    return next((c / f for f in FINALS if c and (c / f).exists()), None)
+
+
+def backup_clip(sid: str, name: str) -> Path | None:
+    """Copy a clip that's going to be posted to HOME/posting-backup/<sid>/clips/<name> (video +
+    review/titles + the session's meta.json). Until it's on YouTube nothing can lose it: not a
+    re-make, a delete outside the app, a move, or a drive that's gone at posting time.
+    A copy, not a hard link: ffmpeg rewrites the same file in place."""
+    d = clipper.find_session(sid)
+    c = d / "clips" / name if d and clipper.CLIP_RE.match(name) else None
+    video = final_of(c)
+    if not video:
+        return None
+    b = clipper.backup_clip_dir(sid, name)
+    try:
+        b.mkdir(parents=True, exist_ok=True)
+        have = final_of(b)
+        if not (have and have.name == video.name and have.stat().st_size == video.stat().st_size):
+            part = b / (video.name + ".part")
+            shutil.copyfile(video, part)
+            for f in FINALS:
+                (b / f).unlink(missing_ok=True)
+            part.replace(b / video.name)
+        for f in BACKUP_KEEP:  # small; refreshed so a later title/description edit is in the copy too
+            if (c / f).exists():
+                shutil.copyfile(c / f, b / f)
+        if (d / "meta.json").exists():
+            shutil.copyfile(d / "meta.json", b.parent.parent / "meta.json")
+        return b
+    except OSError as e:
+        print(f"[youtube] couldn't back up {sid}/{name}: {e}", flush=True)
+        return None
+
+
+def drop_backup(sid: str, name: str) -> None:
+    b = clipper.backup_clip_dir(sid, name)
+    shutil.rmtree(b, ignore_errors=True)
+    s = b.parent.parent  # the session's folder in the backup: gone once its last clip is
+    if s.is_dir() and not any((s / "clips").iterdir() if (s / "clips").is_dir() else []):
+        shutil.rmtree(s, ignore_errors=True)
+
+
+def restore_from_backup(sid: str, name: str) -> bool:
+    """A scheduled clip whose folder is gone from its session (deleted by hand, re-made away)
+    gets its copy put back. Not while the session is moving or its drive is missing."""
+    b = clipper.backup_clip_dir(sid, name)
+    d = clipper.find_session(sid)
+    if not d or mover.busy(sid) or not final_of(b) or not clipper.CLIP_RE.match(name):
+        return False
+    c = d / "clips" / name
+    if final_of(c):
+        return False
+    try:
+        c.mkdir(parents=True, exist_ok=True)
+        for f in b.iterdir():
+            if f.is_file() and not f.name.endswith(".part") and not (c / f.name).exists():
+                shutil.copyfile(f, c / f.name)
+        clipper.write_clips_md(d)
+    except Exception as e:
+        print(f"[youtube] couldn't restore {sid}/{name}: {e}", flush=True)
+        return False
+    print(f"[youtube] restored scheduled clip {sid}/{name} from its backup", flush=True)
+    return True
+
+
+def purge_backups() -> int:
+    """Remove copies of clips that are no longer waiting to post (posted, removed, or a failed
+    Post now that isn't on the list)."""
+    root = HOME / clipper.POST_BACKUP
+    if not root.is_dir():
+        return 0
+    with QUEUE_LOCK:
+        keep = {i["key"] for i in load_queue()["items"]} | {k for k, u in UPLOADS.items() if ytb(u)}
+    n = 0
+    for c in root.glob("*/clips/*"):
+        sid = c.parent.parent.name
+        if c.is_dir() and f"{sid}/{c.name}" not in keep:
+            drop_backup(sid, c.name)
+            n += 1
+    return n
 
 
 def _clip_dir(sid: str, name: str) -> Path | None:
@@ -579,6 +674,7 @@ def yt_post(sid: str, name: str, title: str | None) -> tuple[int, dict]:
             it["status"] = "uploading"
             title = title or it.get("title")
             save_queue(q)
+        backup_clip(sid, name)
         _start_upload(key, sid, name, title)
     return 200, {"result": "Uploading…"}
 
@@ -635,9 +731,11 @@ def queue_add(sid: str, name: str, title: str | None) -> tuple[int, dict]:
         q["items"].append({"key": key, "sid": sid, "name": name, "title": (title or "").strip()[:100] or None,
                            "at": at, "status": "waiting", "error": None, "added": int(time.time())})
         save_queue(q)
+    backup_clip(sid, name)
     r = review.get(c)
     if r["state"] in ("new", "skipped") or (title and title != r.get("title")):
         review.put(c, "kept" if r["state"] in ("new", "skipped") else r["state"], title=title or None)
+    backup_clip(sid, name)  # again, so the copy has the title just saved
     return 200, {"result": f"Scheduled for {youtube.local_label(yt_cfg(), at)}", "at": at}
 
 
@@ -683,6 +781,7 @@ def queue_action(data: dict) -> tuple[int, dict]:
         if act == "remove":
             q["items"].remove(it)
             save_queue(q)
+            drop_backup(it["sid"], it["name"])
             return 200, {"result": "Removed from the schedule. The clip stays in Kept."}
         if act == "title":
             it["title"] = str(data.get("title") or "").strip()[:100] or None
@@ -695,6 +794,7 @@ def queue_action(data: dict) -> tuple[int, dict]:
                 return 404, {"error": "no such clip"}
             text = str(data.get("description") or "").strip()[:4900] or None
             review.put(c, review.get(c)["state"], description=text)
+            backup_clip(sid, name)
             return 200, {"result": "Description saved" if text else "Description reset"}
         if act == "move":  # swap times with the neighbour, so the order changes but the slots don't
             waiting = [i for i in q["items"] if i["status"] == "waiting"]
@@ -740,6 +840,9 @@ def yt_tick(now=None) -> None:
     iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     with QUEUE_LOCK:
         q = load_queue()
+        for i in q["items"]:
+            if i["status"] == "waiting":
+                restore_from_backup(i["sid"], i["name"])
         if q["paused"] or not (youtube.load_token(HOME) or {}).get("refresh_token"):
             return
         if any(i["status"] == "uploading" for i in q["items"]) or any(ytb(u) for u in UPLOADS.values()):
@@ -769,6 +872,10 @@ def yt_scheduler() -> None:
             if i["status"] == "uploading":
                 i["status"] = "waiting"
         save_queue(q)
+        items = list(q["items"])
+    for i in items:  # clips scheduled before backups existed get their copy now
+        if not final_of(clipper.backup_clip_dir(i["sid"], i["name"])):
+            backup_clip(i["sid"], i["name"])
     while True:
         try:
             yt_tick()
@@ -870,6 +977,56 @@ def session_spikes(sid: str) -> list[dict]:
                     "score": m.score, "messages": m.messages, "top": m.top[:3],
                     "requests": m.requests, "kind": m.kind})
     return out
+
+
+def session_frame(sid: str, at: float) -> bytes | None:
+    """One JPEG frame (960 wide) for marking the facecam box: from the recording at `at` seconds,
+    else from a clip's raw cut when the recording is gone or can't be read there."""
+    d = clipper.find_session(sid)
+    video = next((d / f for f in ("stream.ts", "stream.mp4", "stream.mkv") if (d / f).exists()), None)
+    srcs = [(video, at)] if video else []
+    srcs += [(f / "raw.mp4", 2.0) for _, _, f in clipper.clip_folders(d) if (f / "raw.mp4").exists()][:3]
+    for src, t in srcs:
+        try:
+            r = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{max(0.0, t):.2f}", "-i", str(src),
+                                "-frames:v", "1", "-vf", "scale=960:-2:out_range=full,format=yuvj420p", "-q:v", "4",
+                                "-f", "image2pipe", "-vcodec", "mjpeg", "-"], capture_output=True, timeout=40)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if r.returncode == 0 and r.stdout:
+            return r.stdout
+    return None
+
+
+def facecam_info(sid: str) -> dict:
+    d = clipper.find_session(sid)
+    meta = json.loads((d / "meta.json").read_text())
+    rnd = clipper.load_cfg()["render"]
+    tl = clipper.session_timeline(d, clipper.load_cfg())
+    return {"channel": meta.get("channel", ""), "box": clipper.facecam_box(meta.get("channel", "")),
+            "format": render.out_format(rnd), "height": rnd.get("facecam_height", 0.4),
+            "game": rnd.get("facecam_game", "fill"), "duration": tl["duration"],
+            "clips": [st for _, st, _ in clipper.clip_folders(d)]}
+
+
+def save_facecam(sid: str, data: dict) -> tuple[int, dict]:
+    """Save (or clear) the channel's camera box; optionally switch the output to facecam on top."""
+    d = clipper.find_session(sid)
+    ch = json.loads((d / "meta.json").read_text()).get("channel", "")
+    box = data.get("box")
+    try:
+        clipper.set_facecam_box(ch, None if box is None else list(box)[:4])
+    except (ValueError, TypeError) as e:
+        return 400, {"error": str(e) if isinstance(e, ValueError) else "the box needs x, y, w, h"}
+    if box is None:
+        return 200, {"result": f"Facecam box cleared for @{ch.lstrip('@')}"}
+    note = ""
+    if data.get("use") and render.out_format(clipper.load_cfg()["render"]) != "9:16-facecam":
+        code, r = save_settings({"render.format": "9:16-facecam"})
+        if code != 200:
+            return code, r
+        note = " New clips now use facecam on top."
+    return 200, {"result": f"Facecam box saved for @{ch.lstrip('@')}.{note} Re-make clips to apply it to this session."}
 
 
 def delete_session(sid: str, source_only: bool) -> str:
@@ -1133,6 +1290,22 @@ class H(BaseHTTPRequestHandler):
             if self.session_or_404(m[1]):
                 self.send(200, session_detail(m[1]))
             return
+        if m := re.fullmatch(r"/api/sessions/([\w-]+)/facecam", path):
+            if self.session_or_404(m[1]):
+                self.send(200, facecam_info(m[1]))
+            return
+        if m := re.fullmatch(r"/api/sessions/([\w-]+)/frame", path):
+            if self.session_or_404(m[1]):
+                try:
+                    at = float(q.get("at", ["60"])[0])
+                except ValueError:
+                    at = 60.0
+                jpg = session_frame(m[1], at)
+                if jpg:
+                    self.send(200, jpg, "image/jpeg")
+                else:
+                    self.send(404, {"error": "couldn't read a frame from this session's video"})
+            return
         if m := re.fullmatch(r"/api/sessions/([\w-]+)/timeline", path):
             if self.session_or_404(m[1]):
                 self.send(200, clipper.session_timeline(clipper.find_session(m[1]), clipper.load_cfg()))
@@ -1253,6 +1426,11 @@ class H(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self.send(404, {"error": str(e)})
             return self.send(200, {"result": f"Deleted {name}", "trash": tid})
+        if m := re.fullmatch(r"/api/sessions/([\w-]+)/facecam", path):
+            if self.session_or_404(m[1]):
+                code, body = save_facecam(m[1], data)
+                self.send(code, body)
+            return
         if m := re.fullmatch(r"/api/sessions/([\w-]+)/clips/restore", path):
             if not self.session_or_404(m[1]):
                 return
@@ -1317,6 +1495,10 @@ class H(BaseHTTPRequestHandler):
                 code, body = yt_unschedule(sid, name)
             elif act == "clear-upload":
                 UPLOADS.pop(f"{sid}/{name}", None)
+                with QUEUE_LOCK:
+                    listed = any(i["key"] == f"{sid}/{name}" for i in load_queue()["items"])
+                if not listed:  # a failed Post now: its copy isn't needed any more
+                    drop_backup(sid, name)
                 code, body = 200, {"result": "ok"}
             elif act == "schedule":
                 code, body = queue_add(sid, name, data.get("title"))
@@ -1422,6 +1604,10 @@ def main() -> None:
             n = sum(clipper.purge_trash(d) for d in all_session_dirs())
             if n:
                 print(f"trash: removed {n} clip(s) deleted more than {clipper.TRASH_DAYS} days ago", flush=True)
+            try:
+                purge_backups()
+            except Exception as e:
+                print(f"[youtube] backup cleanup: {e}", flush=True)
             time.sleep(3600)
     threading.Thread(target=purge_loop, daemon=True).start()
     bad = write_problems()

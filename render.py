@@ -29,7 +29,23 @@ def pick_encoder(want: str = "auto") -> str:
     return _ENCODER
 
 
-FORMATS = ("16:9", "9:16-blur", "9:16-bars", "9:16-crop")
+FORMATS = ("16:9", "9:16-blur", "9:16-bars", "9:16-crop", "9:16-facecam")
+
+
+def facecam_layout(cfg: dict) -> tuple[list[float], int, str] | None:
+    """For 9:16-facecam: (box, cam_h, game). box = [x, y, w, h] as fractions of the source frame
+    (the streamer's camera), cam_h = pixel height of the camera strip on top, game = "fill"
+    (gameplay cropped to fill the rest) or "whole" (whole frame, blurred fill). None = no box."""
+    box = cfg.get("facecam_box")
+    try:
+        x, y, w, h = (float(v) for v in box)
+    except (TypeError, ValueError):
+        return None
+    x, y = min(max(x, 0.0), 0.98), min(max(y, 0.0), 0.98)
+    w, h = min(max(w, 0.02), 1 - x), min(max(h, 0.02), 1 - y)
+    frac = min(max(float(cfg.get("facecam_height", 0.4) or 0.4), 0.2), 0.6)
+    cam_h = int(1920 * frac) // 2 * 2
+    return [x, y, w, h], cam_h, ("whole" if cfg.get("facecam_game") == "whole" else "fill")
 
 
 def out_format(cfg: dict) -> str:
@@ -50,17 +66,35 @@ def frame_size(fmt: str) -> tuple[int, int]:
     return (1920, 1080) if fmt == "16:9" else (1080, 1920)
 
 
-def filter_graph(fmt: str, sub: str = "") -> str:
+def filter_graph(fmt: str, sub: str = "", cfg: dict | None = None) -> str:
     """ffmpeg -filter_complex for each output shape. `sub` = ",ass=subs.ass" or "".
 
     16:9       whole frame, letterboxed to 1920x1080 if the source isn't 16:9
     9:16-blur  whole 16:9 frame across the middle, blurred copy fills top/bottom
     9:16-bars  whole 16:9 frame across the middle, black top/bottom
     9:16-crop  centre of the frame cropped to fill 1080x1920 (loses the sides)
+    9:16-facecam  the streamer's camera (facecam_box) on top, gameplay below (see facecam_layout)
     """
     w, h = frame_size(fmt)
     fit = f"scale={w}:{h}:force_original_aspect_ratio=decrease:force_divisible_by=2"
     fill = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
+    lay = facecam_layout(cfg or {}) if fmt == "9:16-facecam" else None
+    if lay:
+        (bx, by, bw, bh), ch, game = lay
+        gh = h - ch
+        cam = (f"crop=trunc(iw*{bw:.4f}/2)*2:trunc(ih*{bh:.4f}/2)*2:trunc(iw*{bx:.4f}):trunc(ih*{by:.4f}),"
+               f"scale={w}:{ch}:force_original_aspect_ratio=increase,crop={w}:{ch}")
+        gfill = f"scale={w}:{gh}:force_original_aspect_ratio=increase,crop={w}:{gh}"
+        if game == "whole":
+            g = (f"[g]split[g1][g2];[g1]{gfill},boxblur=20:4,eq=brightness=-0.08[gbg];"
+                 f"[g2]scale={w}:{gh}:force_original_aspect_ratio=decrease:force_divisible_by=2[gfg];"
+                 f"[gbg][gfg]overlay=(W-w)/2:(H-h)/2[game]")
+        else:
+            g = f"[g]{gfill}[game]"
+        return (f"[0:v]split[c][g];[c]{cam}[cam];{g};"
+                f"[cam][game]vstack,setsar=1{sub}[v]")
+    if fmt == "9:16-facecam":  # no box for this channel yet: same as 9:16-blur
+        fmt = "9:16-blur"
     if fmt == "9:16-blur":
         return ("[0:v]split[a][b];"
                 f"[a]{fill},boxblur=20:4,eq=brightness=-0.08[bg];"
@@ -385,7 +419,16 @@ def build_subs(speech_srt: Path | None, credit: str | None, length: float, out: 
     w, h = frame_size(fmt)
     font = pick_font(cfg.get("font", "auto"))
     fs = int(cfg.get("font_size", 64))
-    if fmt in ("9:16-blur", "9:16-bars"):
+    lay = facecam_layout(cfg) if fmt == "9:16-facecam" else None
+    credit_align, credit_margin = 8, (120 if vertical else 30)
+    if lay:
+        _, ch, game = lay
+        # captions just under the seam (over the top of the gameplay, not the face);
+        # with the whole frame, under the gameplay band instead. Credit at the bottom, off the face.
+        band = w * 9 // 16
+        cap_align, cap_margin = 8, ch + ((h - ch + band) // 2 + 30 if game == "whole" else 40)
+        credit_align, credit_margin = 2, 140
+    elif fmt in ("9:16-blur", "9:16-bars", "9:16-facecam"):
         # 16:9 video fills the middle band (1080x608); captions hang just below it
         cap_align, cap_margin = 8, (h + w * 9 // 16) // 2 + 40
     elif fmt == "9:16-crop":
@@ -414,7 +457,7 @@ WrapStyle: 0
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Caption,{font},{fs},&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,{max(3, fs // 14)},0,{cap_align},60,60,{cap_margin},1
-Style: Credit,{font},{max(28, fs // 2)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,3,8,0,8,40,40,{120 if vertical else 30},1
+Style: Credit,{font},{max(28, fs // 2)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,3,8,0,{credit_align},40,40,{credit_margin},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -441,7 +484,7 @@ def render(clip: Path, subs: Path | None, out: Path, cfg: dict) -> None:
               "Run setup.sh to install an ffmpeg with libass.", flush=True)
         subs = None
     sub = f",ass={subs.name}" if subs else ""
-    vf = filter_graph(out_format(cfg), sub)
+    vf = filter_graph(out_format(cfg), sub, cfg)
 
     enc = pick_encoder(cfg.get("encoder", "auto"))
     if "videotoolbox" in enc:

@@ -234,6 +234,22 @@ dialog#dlg::backdrop{background:rgba(0,0,0,.55)}
 dialog#dlg h3{color:var(--ink);font-size:17px;margin:0 0 8px}
 dialog#dlg p{margin:0 0 18px;color:var(--mute);font-size:14px;line-height:1.5}
 dialog#dlg .row{justify-content:flex-end}
+/* facecam box: draw on a frame, see the Short it makes */
+dialog#fc{border:1px solid var(--rule2);border-radius:12px;background:var(--panel);color:var(--ink);padding:18px 20px;width:min(980px,calc(100% - 32px));max-height:calc(100% - 32px)}
+dialog#fc::backdrop{background:rgba(0,0,0,.6)}
+dialog#fc h3{font-size:17px;margin:0 0 4px}
+.fc-wrap{display:grid;grid-template-columns:minmax(0,1fr) 170px;gap:18px;align-items:start;margin:12px 0 14px}
+.fc-stage{position:relative;user-select:none;touch-action:none;cursor:crosshair;background:var(--panel2);border-radius:6px;overflow:hidden;min-height:120px}
+.fc-stage img{display:block;width:100%;height:auto;pointer-events:none}
+.fc-stage .msg{position:absolute;inset:0;display:grid;place-items:center;color:var(--mute);font-size:13.5px;text-align:center;padding:12px}
+.fc-box{position:absolute;border:2px solid var(--cue);box-shadow:0 0 0 9999px rgba(0,0,0,.45);cursor:move;border-radius:2px}
+.fc-box:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.fc-box span{position:absolute;left:0;top:0;background:var(--cue);color:#06110f;font-size:12px;font-weight:600;padding:1px 7px;border-radius:0 0 4px 0;white-space:nowrap}
+.fc-prev{display:flex;flex-direction:column;gap:6px;align-items:center}
+.fc-prev canvas{width:162px;height:288px;border-radius:8px;background:#000;border:1px solid var(--rule2)}
+.fc-prev .faint{font-size:12px;text-align:center}
+dialog#fc .row.end{justify-content:flex-end}
+@media (max-width:640px){.fc-wrap{grid-template-columns:1fr}.fc-prev canvas{width:135px;height:240px}}
 button.danger{background:var(--bad);border-color:var(--bad);color:#fff}
 button.danger:hover{background:color-mix(in srgb,var(--bad) 85%,#000)}
 .busy{opacity:.75;pointer-events:none}
@@ -391,6 +407,14 @@ nav .badge{display:inline-block;min-width:18px;padding:0 6px;margin-left:6px;bor
 <div id="v-system" hidden><div id="system"></div></div>
 </main>
 <div id="toast" role="status"></div>
+<dialog id="fc" aria-labelledby="fc-t"><h3 id="fc-t">Where's the camera?</h3>
+  <div class="mut" style="font-size:13.5px" id="fc-help"></div>
+  <div class="fc-wrap"><div class="fc-stage" id="fc-stage"><img id="fc-img" alt="A frame from this stream"><div class="msg" id="fc-msg">Loading a frame…</div></div>
+    <div class="fc-prev"><canvas id="fc-cv" width="270" height="480" aria-label="Preview of the Short"></canvas><div class="faint" id="fc-cap">The Short</div></div></div>
+  <div class="row between" style="gap:10px;flex-wrap:wrap">
+    <div class="row" style="gap:8px"><button class="sm" id="fc-next">Another frame</button><button class="sm quiet bad" id="fc-clear" hidden>Remove box</button></div>
+    <label class="row" style="gap:6px;font-size:13.5px" id="fc-uselbl"><input type="checkbox" id="fc-use" checked> Use facecam on top for new clips</label>
+    <div class="row end" style="gap:8px"><button class="sm quiet" id="fc-cancel">Cancel</button><button class="sm pri" id="fc-save" disabled>Save box</button></div></div></dialog>
 <dialog id="dlg" aria-labelledby="dlg-t"><form method="dialog"><h3 id="dlg-t"></h3><p id="dlg-b"></p>
   <div class="row"><button value="cancel" id="dlg-no">Cancel</button><button value="ok" id="dlg-ok" class="pri">OK</button></div></form></dialog>
 
@@ -666,6 +690,64 @@ $('moveall').onclick=async()=>{if(!await ask('Move sessions?','Every session not
   const r=await post('/api/sessions/move-all');toast(r.result||r.error);loadSessions()};
 $('sessions').onclick=e=>{const r=e.target.closest('tr[data-id]');if(r){curSession=r.dataset.id;openSession(curSession);history.replaceState(null,'','#sessions/'+curSession)}};
 let clipSig='';
+// ---- facecam box: drag a box over the camera on a frame; the preview shows the Short it makes
+const FC={sid:null,box:null,info:null,n:0};
+async function openFacecam(sid){
+  const info=await j(`/api/sessions/${encodeURIComponent(sid)}/facecam`);if(info.error){toast(info.error);return}
+  Object.assign(FC,{sid,info,box:info.box?[...info.box]:null,n:0});
+  const who='@'+String(info.channel||'').replace(/^@/,'');
+  $('fc-help').textContent=`Drag a box around ${who}'s camera. It's saved for every stream of ${who}; then press Re-make clips to use it on this session.`;
+  $('fc-uselbl').hidden=info.format==='9:16-facecam';$('fc-clear').hidden=!info.box;
+  fcFrame();$('fc').showModal()}
+function fcAt(){const i=FC.info,c=i.clips||[];  // clip moments first (the camera is surely on), then spread over the stream
+  return FC.n<Math.min(c.length,4)?Math.round(c[FC.n]+4):Math.round((i.duration||600)*(((FC.n*0.37)%0.9)+0.05))}
+function fcFrame(){
+  const img=$('fc-img');$('fc-msg').hidden=false;$('fc-msg').textContent='Loading a frame…';$('fc-next').disabled=true;
+  img.onload=()=>{$('fc-msg').hidden=true;$('fc-next').disabled=false;fcDraw()};
+  img.onerror=()=>{$('fc-msg').textContent="Couldn't read a frame from this session's video.";$('fc-next').disabled=false};
+  img.src=`/api/sessions/${encodeURIComponent(FC.sid)}/frame?at=${fcAt()}&n=${FC.n}`}
+function fcDraw(){
+  const st=$('fc-stage');let el=st.querySelector('.fc-box');const b=FC.box;
+  $('fc-save').disabled=!b;
+  $('fc-cap').textContent=!b?'Draw a box to see the Short':FC.info.game==='whole'?'The Short: whole gameplay frame below':'The Short: gameplay cropped to fill';
+  if(!b){if(el)el.remove()}
+  else{if(!el){el=document.createElement('div');el.className='fc-box';el.tabIndex=0;el.setAttribute('role','img');
+        el.setAttribute('aria-label','Camera box. Arrow keys move it, Shift with arrows resizes it.');el.innerHTML='<span>Camera</span>';st.appendChild(el)}
+    Object.assign(el.style,{left:b[0]*100+'%',top:b[1]*100+'%',width:b[2]*100+'%',height:b[3]*100+'%'})}
+  fcPreview()}
+function fcPreview(){
+  const cv=$('fc-cv'),g=cv.getContext('2d'),img=$('fc-img'),W=cv.width,H=cv.height;
+  g.fillStyle='#000';g.fillRect(0,0,W,H);if(!img.naturalWidth)return;
+  const iw=img.naturalWidth,ih=img.naturalHeight,b=FC.box,ch=b?Math.round(H*(+FC.info.height||0.4)):0;
+  const cover=(sx,sy,sw,sh,dy,dh)=>{const s=Math.max(W/sw,dh/sh),vw=W/s,vh=dh/s;g.drawImage(img,sx+(sw-vw)/2,sy+(sh-vh)/2,vw,vh,0,dy,W,dh)};
+  if(b)cover(b[0]*iw,b[1]*ih,b[2]*iw,b[3]*ih,0,ch);
+  const gh=H-ch;
+  if(b&&FC.info.game!=='whole'){cover(0,0,iw,ih,ch,gh)}
+  else{g.save();g.filter='blur(6px) brightness(.9)';cover(0,0,iw,ih,ch,gh);g.restore();
+    const fh=W*ih/iw;g.drawImage(img,0,0,iw,ih,0,ch+(gh-fh)/2,W,fh)}
+  if(b){g.fillStyle='rgba(255,255,255,.85)';g.fillRect(0,ch-1,W,2)}}
+(()=>{
+  const st=$('fc-stage');let drag=null;
+  const pt=e=>{const r=st.getBoundingClientRect();return[Math.min(1,Math.max(0,(e.clientX-r.left)/r.width)),Math.min(1,Math.max(0,(e.clientY-r.top)/r.height))]};
+  st.addEventListener('pointerdown',e=>{if(!$('fc-img').naturalWidth)return;const p=pt(e),b=FC.box;
+    drag=b&&e.target.closest('.fc-box')?{move:true,p,b:[...b]}:{move:false,p};st.setPointerCapture(e.pointerId);e.preventDefault()});
+  st.addEventListener('pointermove',e=>{if(!drag)return;const p=pt(e);
+    if(drag.move){const b=drag.b;FC.box=[Math.min(1-b[2],Math.max(0,b[0]+p[0]-drag.p[0])),Math.min(1-b[3],Math.max(0,b[1]+p[1]-drag.p[1])),b[2],b[3]]}
+    else{const x=Math.min(p[0],drag.p[0]),y=Math.min(p[1],drag.p[1]),w=Math.abs(p[0]-drag.p[0]),h=Math.abs(p[1]-drag.p[1]);
+      if(w>0.02&&h>0.02)FC.box=[x,y,w,h]}
+    fcDraw()});
+  st.addEventListener('pointerup',()=>{drag=null;const el=st.querySelector('.fc-box');if(el)el.focus({preventScroll:true})});
+  st.addEventListener('keydown',e=>{const b=FC.box,k={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]}[e.key];
+    if(!b||!k||!e.target.closest('.fc-box'))return;e.preventDefault();const s=0.005;
+    if(e.shiftKey)FC.box=[b[0],b[1],Math.min(1-b[0],Math.max(0.03,b[2]+k[0]*s)),Math.min(1-b[1],Math.max(0.03,b[3]+k[1]*s))];
+    else FC.box=[Math.min(1-b[2],Math.max(0,b[0]+k[0]*s)),Math.min(1-b[3],Math.max(0,b[1]+k[1]*s)),b[2],b[3]];
+    fcDraw()});
+  $('fc-next').onclick=()=>{FC.n++;fcFrame()};
+  $('fc-cancel').onclick=()=>$('fc').close();
+  $('fc-clear').onclick=async()=>{const r=await post(`/api/sessions/${encodeURIComponent(FC.sid)}/facecam`,{box:null});toast(r.result||r.error);if(!r.error)$('fc').close()};
+  $('fc-save').onclick=async()=>{const r=await post(`/api/sessions/${encodeURIComponent(FC.sid)}/facecam`,{box:FC.box.map(v=>+v.toFixed(4)),use:!$('fc-uselbl').hidden&&$('fc-use').checked});
+    toast(r.result||r.error);if(!r.error){$('fc').close();if(settings&&!dirty)loadSettings()}};
+})();
 async function openSession(id,soft){
   const d=await j('/api/sessions/'+encodeURIComponent(id));
   if(d.error){curSession=null;return loadSessions()}
@@ -678,6 +760,7 @@ async function openSession(id,soft){
       ${s.failed?`<button class="sm pri" id="fixall" ${d.busy||!s.has_source?'disabled':''}>Fix ${s.failed} failed clip${s.failed>1?'s':''}</button>`:''}
       <button class="sm" id="reclip" ${d.busy||!s.has_source?'disabled':''} title="Cut, caption and render every clip again with the current settings; clips at the same time are overwritten, except posted and scheduled ones, which are kept as they are">Re-make clips</button>
       <button class="sm" id="reqclip" ${d.busy||!s.has_source?'disabled':''} title="Cut clips for moments where 3+ chatters asked for a clip, that don't have a clip yet. Existing clips stay.">Add clip-request clips</button>
+      <button class="sm" id="fcbox" title="Mark where the streamer's camera is, for Shorts with the facecam on top and gameplay below">Facecam box</button>
       <details class="more" style="margin-left:auto"><summary class="btn sm">More</summary><div class="menu">
         <button id="spk">List moments</button>
         ${d.in_recordings_folder?'':`<button id="mvses" ${d.busy?'disabled':''}>${d.unsorted?'Move into channel folder':'Move to recordings folder'}</button>`}
@@ -734,6 +817,7 @@ async function openSession(id,soft){
       if(r.error)toast(r.error);else toast(`Deleted ${clipTime(db.dataset.del)}. It stays in the trash for 7 days.`,async()=>{
         const u=await post(`/api/sessions/${id}/clips/restore`,{trash:r.trash});toast(u.result||u.error);clipSig='';openSession(id,true);refreshAttention()})}};
   $('reqclip').onclick=async()=>{const r=await post(`/api/sessions/${id}/requests`);toast(r.error||'Finding clip requests — new clips appear here as they finish');openSession(id,true)};
+  $('fcbox').onclick=()=>openFacecam(id);
   $('reclip').onclick=async()=>{const r=await post(`/api/sessions/${id}/process`);toast(r.result||r.error);openSession(id,true)};
   $('delsrc').onclick=async()=>{if(!await ask('Delete the recording?','The full recording of this session is deleted to free disk space. Clips stay, but they can no longer be re-made or fixed. This can\'t be undone.','Delete recording',true))return;
     const r=await post(`/api/sessions/${id}/delete-source`);toast(r.result||r.error);openSession(id,true)};
@@ -1006,7 +1090,7 @@ document.addEventListener('click',async e=>{
 let schedSig='';
 function schedPlan(){const p=(yt&&yt.plan)||{},r=+p.random||0;
   const gap=r?`${p.gap}–${+(+p.gap+r/60).toFixed(2)} h apart at random minutes`:`${p.gap} h apart`;
-  return `Posts up to ${p.per_day} a day, ${gap}, between ${esc(p.start)} and ${esc(p.end)} (${esc(p.tz)}), as ${esc(yt.privacy)}`}
+  return `Posts up to ${p.per_day} a day, ${gap}, between ${esc(p.start)} and ${esc(p.end)} (${esc(p.tz)}), as ${esc(yt.privacy)}. A copy of each clip is kept until it's posted`}
 function renderSched(){
   const el=$('sched');if(!el)return;
   if(!yt){el.innerHTML='<div class="card mut">Loading…</div>';return}
@@ -1194,7 +1278,7 @@ function field(f){
   if(f.type==='bool')input=`<label class="row" style="gap:8px;padding:6px 0"><input type="checkbox" id="${id}" data-k="${f.key}" ${v?'checked':''}><span>${v?'On':'Off'}</span></label>`;
   else if(f.type==='enum')input=`<select id="${id}" data-k="${f.key}">${f.options.map(o=>`<option value="${esc(o)}" ${o===v?'selected':''}>${esc((f.labels||{})[o]||o)}</option>`).join('')}</select>`;
   else if(f.type==='list')input=`<textarea id="${id}" data-k="${f.key}" rows="3">${esc((v||[]).join(', '))}</textarea>`;
-  else input=`<input id="${id}" data-k="${f.key}" ${f.key==='titles.model'?'list="or-models"':''} type="${f.type==='secret'?'password':(f.type==='int'||f.type==='float')?'number':'text'}" ${f.type==='float'?'step="any"':''} ${f.min!=null?`min="${f.min}"`:''} value="${esc(v??'')}" autocomplete="off">`;
+  else input=`<input id="${id}" data-k="${f.key}" ${f.key==='titles.model'?'list="or-models"':''} type="${f.type==='secret'?'password':(f.type==='int'||f.type==='float')?'number':'text'}" ${f.type==='float'?'step="any"':''} ${f.min!=null?`min="${f.min}"`:''} ${f.max!=null?`max="${f.max}"`:''} value="${esc(v??'')}" autocomplete="off">`;
   return `<label class="f" for="${id}" style="${wide?'grid-column:1/-1':''}"><span>${esc(f.label)}${changed?'<i class="chg" title="Changed from the default"></i>':''}${changed&&d!==undefined&&d!==null?`<button type="button" class="rst" data-reset="${f.key}" title="Back to the default: ${esc(Array.isArray(d)?d.join(', '):d)}">Reset</button>`:''}</span>${input}${f.help?`<div class="help">${esc(f.help)}</div>`:''}</label>`;
 }
 $('settings').oninput=e=>{if(e.target.id==='ck-file'||e.target.id==='pv-s')return;dirty=true;$('set-msg').textContent='Unsaved changes';$('set-msg').className='';

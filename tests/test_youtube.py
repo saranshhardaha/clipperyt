@@ -196,6 +196,8 @@ class Posting(unittest.TestCase):
         cls.g.shutdown()
         youtube.forget(HOME)
         server.queue_path().unlink(missing_ok=True)
+        import shutil
+        shutil.rmtree(HOME / clipper.POST_BACKUP, ignore_errors=True)
 
     def wait(self, key, timeout=10):
         end = time.time() + timeout
@@ -338,6 +340,52 @@ class Posting(unittest.TestCase):
         call(self.port, "/api/youtube/disconnect", {})
         self.assertFalse(call(self.port, "/api/youtube")[1]["connected"])
         self.assertFalse(youtube.token_path(HOME).exists())
+
+    def test_zz_scheduled_clip_is_backed_up(self):  # after test_flow (it counts uploads)
+        import shutil
+        youtube.save_token(HOME, {"access_token": "at-1", "refresh_token": "rt-1",
+                                  "expires_at": time.time() + 3600, "channel_title": "Clips Daily"})
+        s = HOME / "sessions" / "speedy" / "20990111-0000-speedy"
+        c = s / "clips" / "01_00-02-00"
+        c.mkdir(parents=True)
+        body = bytes(range(255, -1, -1)) * 5
+        (c / "short.mp4").write_bytes(body)
+        (s / "meta.json").write_text(json.dumps({"platform": "youtube", "channel": "SpeedyGamer",
+                                                 "source_url": "https://youtu.be/abc"}))
+        key = f"{s.name}/01_00-02-00"
+        code, r = call(self.port, f"/api/sessions/{s.name}/clips/01_00-02-00/schedule", {"title": "Saved copy"})
+        self.assertEqual(code, 200, r)
+        b = clipper.backup_clip_dir(s.name, "01_00-02-00")
+        self.assertEqual((b / "short.mp4").read_bytes(), body)                 # a real copy, with the meta
+        self.assertNotEqual((b / "short.mp4").stat().st_ino, (c / "short.mp4").stat().st_ino)
+        self.assertTrue((b.parent.parent / "meta.json").exists())
+        self.assertEqual(clipper.locked_clips(s), {"01_00-02-00": "scheduled"})
+
+        # the clip folder deleted by hand: the next tick puts it back from the copy
+        shutil.rmtree(c)
+        server.yt_tick(datetime.now(timezone.utc))                   # not due yet
+        self.assertEqual((c / "short.mp4").read_bytes(), body)
+
+        # the whole session gone (drive unplugged, deleted outside the app): it still posts, from the copy
+        shutil.rmtree(s)
+        at = next(i["at"] for i in server.load_queue()["items"] if i["key"] == key)
+        server.yt_tick(datetime.fromisoformat(at.replace("Z", "+00:00")) + timedelta(minutes=1))
+        self.assertEqual(self.wait(key)["status"], "done")
+        sent = G["uploads"][f"s{len(G['uploads'])}"]
+        self.assertEqual(bytes(sent), body)
+        self.assertEqual(G["meta"][-1]["snippet"]["title"], "Saved copy")
+        self.assertIn("@SpeedyGamer", G["meta"][-1]["snippet"]["description"])
+        self.assertFalse(b.exists())                                           # posted: copy removed
+        self.assertFalse(b.parent.parent.exists())
+        self.assertEqual(server.load_queue()["history"][0]["key"], key)
+
+        # copies nothing needs any more are cleaned up
+        orphan = clipper.backup_clip_dir("20990112-0000-speedy", "01_00-00-05")
+        orphan.mkdir(parents=True)
+        (orphan / "short.mp4").write_bytes(b"x")
+        self.assertEqual(server.purge_backups(), 1)
+        self.assertFalse(orphan.exists())
+        youtube.forget(HOME)
 
 
 if __name__ == "__main__":

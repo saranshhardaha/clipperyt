@@ -76,7 +76,11 @@ translate = false           # true = English captions (needs a non-turbo model, 
 #   "9:16-bars"  1080x1920, the whole 16:9 frame across the middle, black top/bottom
 #   "16:9"       1920x1080, original shape
 #   "9:16-crop"  1080x1920, centre crop (cuts off the sides)
+#   "9:16-facecam" 1080x1920, the streamer's camera on top, gameplay below. Mark where the
+#                camera is once per channel: Facecam box on a session page (saved in facecam.json).
 format = "9:16-blur"
+facecam_height = 0.4        # facecam on top: share of the Short the camera takes (0.2–0.6)
+facecam_game = "fill"       # facecam on top: "fill" = crop gameplay to fill, "whole" = full frame + blur
 # "auto" = Mac hardware (videotoolbox) → NVIDIA GPU (nvenc) → CPU (libx264)
 encoder = "auto"
 font_size = 64               # caption size in px on a 1080-wide frame

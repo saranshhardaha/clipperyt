@@ -278,6 +278,37 @@ def slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")[:32] or "stream"
 
 
+FACECAM = "facecam.json"  # in HOME: {channel slug: [x, y, w, h]} — where the streamer's camera is
+
+
+def facecam_boxes() -> dict[str, list[float]]:
+    try:
+        d = json.loads((HOME / FACECAM).read_text())
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def facecam_box(channel: str) -> list[float] | None:
+    """The camera box for a channel (fractions of the frame), used by render format 9:16-facecam."""
+    return facecam_boxes().get(slug(str(channel).lstrip("@")))
+
+
+def set_facecam_box(channel: str, box: list[float] | None) -> None:
+    boxes = facecam_boxes()
+    key = slug(str(channel).lstrip("@"))
+    if box is None:
+        boxes.pop(key, None)
+    else:
+        x, y, w, h = (round(float(v), 4) for v in box)
+        if not (0 <= x < 1 and 0 <= y < 1 and 0.02 <= w <= 1 - x + 1e-6 and 0.02 <= h <= 1 - y + 1e-6):
+            raise ValueError("the box must be inside the picture")
+        boxes[key] = [x, y, w, h]
+    tmp = HOME / (FACECAM + ".tmp")
+    tmp.write_text(json.dumps(boxes, indent=1))
+    tmp.replace(HOME / FACECAM)
+
+
 def new_session_dir(channel: str, suffix: str = "") -> Path:
     """Reserve a unique, empty <recordings>/<channel>/<YYYYMMDD-HHMM>-<channel><suffix>[-N] folder.
     The id (folder name) is unique across every root and channel folder."""
@@ -827,6 +858,12 @@ def purge_trash(session: Path, days: float = TRASH_DAYS) -> int:
 
 
 YT_QUEUE = "youtube-queue.json"  # in HOME; written by server.py (the posting schedule)
+POST_BACKUP = "posting-backup"   # in HOME: <sid>/clips/<clip>/ = a copy of each clip waiting to post
+
+
+def backup_clip_dir(sid: str, name: str) -> Path:
+    """Where server.py keeps the copy of a clip that's on the posting list (until it's posted)."""
+    return HOME / POST_BACKUP / sid / "clips" / name
 
 
 def locked_clips(session: Path) -> dict[str, str]:
@@ -840,6 +877,10 @@ def locked_clips(session: Path) -> dict[str, str]:
                 out[i.get("name", "")] = "scheduled"
     except Exception:
         pass
+    b = HOME / POST_BACKUP / session.name / "clips"
+    for c in b.iterdir() if b.is_dir() else []:  # being posted (also "Post now", which isn't on the list)
+        if c.is_dir() and CLIP_RE.match(c.name):
+            out.setdefault(c.name, "scheduled")
     for _, _, f in clip_folders(session):
         try:
             r = json.loads((f / "review.json").read_text())
@@ -892,6 +933,12 @@ class _ClipMaker:
         self.plat = " / ".join(NAMES[p] for p in chans)
         self.credit = (f"@{self.meta['channel'].lstrip('@')} · {self.plat}"
                        if cfg["render"].get("credit", True) else None)
+        if render.out_format(cfg["render"]) == "9:16-facecam":
+            box = facecam_box(self.meta.get("channel", ""))
+            if not box:
+                log(f"  ! no facecam box set for {self.meta.get('channel')} — using 9:16-blur. "
+                    "Set it with Facecam box on the session page.")
+            self.cfg = cfg = {**cfg, "render": {**cfg["render"], "facecam_box": box}}
         (session / "clips").mkdir(exist_ok=True)
 
     def header(self) -> list[str]:
@@ -910,7 +957,8 @@ class _ClipMaker:
         d = self.session / "clips" / name
         if folder and folder != name and (self.session / "clips" / folder).is_dir():
             if d.exists() and name in locked_clips(self.session):
-                raise RuntimeError(f"{name} is posted or scheduled; not replacing it")
+                log(f"  clip {n}: {name} is posted or scheduled — left as it is")
+                return f"| {n} | {spikes.fmt(start)} | {m.score} | kept (posted or scheduled) | {name}/ |"
             if d.exists():
                 shutil.rmtree(d)
             os.rename(self.session / "clips" / folder, d)

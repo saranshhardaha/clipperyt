@@ -5,6 +5,9 @@ config.toml.tmp
 .dashboard_token
 cookies*.txt
 youtube-token.json
+youtube-queue.json
+posting-backup/
+facecam.json
 *.cookies.txt
 
 # runtime

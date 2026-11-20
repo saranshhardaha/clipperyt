@@ -53,6 +53,7 @@ Add `--service` to either one to also start the dashboard automatically (systemd
     - A clip made by hand at a spot you deleted brings it back. Clicking a spot that already has a clip doesn't duplicate it.
   - The main actions sit on the page (Fix failed clips, Re-make clips, Add clip-request clips). The rarer ones are under **More**: list moments, move, delete recording, delete session.
   - **Re-make clips** redoes the session with the current settings. Clips posted to YouTube or on the Scheduled list are never overwritten, renamed or redone: they stay exactly as they are, and **Redo** is hidden on them. A scheduled clip (or its session) can't be deleted until you unschedule it.
+  - Every clip on the Scheduled list (and one being posted with **Post now**) also has a copy in `posting-backup/<session>/clips/<clip>/` in the app folder, made when you schedule it. If the clip folder disappears anyway (deleted by hand, a drive that's unplugged), the copy is put back within 20 seconds, and if the whole session is gone it's posted straight from the copy. The copy is removed once the clip is on YouTube or you unschedule it.
     - A moment whose clip start is within half a clip length of an existing clip **overwrites that clip**. It keeps the same number, and the folder is renamed if the start moved.
     - New moments become new clips.
     - Clips that no moment matches any more are kept. Deleted clips stay deleted.
@@ -114,8 +115,15 @@ To move everything (config, jobs and sessions), set `CLIPPER_HOME=/some/disk` in
 | `9:16-bars` | 1080x1920 | the **whole** 16:9 frame across the middle, with black top and bottom |
 | `16:9` | 1920x1080 | the original shape |
 | `9:16-crop` | 1080x1920 | a centre crop that fills the screen but cuts off the sides |
+| `9:16-facecam` | 1080x1920 | the streamer's **camera on top**, gameplay below |
 
 In both 9:16 modes, captions go just under the picture and the credit line goes in the top band.
+
+**Facecam on top.** Open a session and press **Facecam box**. Drag a box around the streamer's camera on a frame from the stream (**Another frame** if the camera isn't on screen); the preview next to it shows the Short it makes. Save, then press **Re-make clips**. The box is saved per channel in `facecam.json` in the app folder, so every later stream of that channel uses it. Settings → Output has two more options:
+- **Facecam height** (`facecam_height`, default 0.4): how much of the Short the camera takes.
+- **Gameplay under the facecam** (`facecam_game`): `fill` crops the gameplay to fill the space (bigger, cuts the sides); `whole` shows the full frame with a blurred fill.
+
+Captions go just under the seam, over the top of the gameplay, and the credit line moves to the bottom so it doesn't cover the face. A channel with no box yet gets `9:16-blur`, and the clip log says so.
 
 ## Update
 
